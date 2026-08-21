@@ -72,7 +72,6 @@ st.markdown("""
 # 1. CONSTANTES AGRONÓMICAS
 # ════════════════════════════════════════════════════
 
-# Rangos foliares en % (post-conversión: macros /10, micros /10000)
 FOLIAR_RANGES = {
     "N":  {"min": 2.50,   "max": 2.80,   "unidad": "g/kg"},
     "P":  {"min": 0.16,   "max": 0.19,   "unidad": "g/kg"},
@@ -87,23 +86,19 @@ FOLIAR_RANGES = {
     "Zn": {"min": 0.0015, "max": 0.0040, "unidad": "ppm"},
 }
 
-# Coeficientes de exportación — Cravo & Viégas 2000 (solo para S, Cu, Fe, Mn, Zn)
 EXPORT_COEF = {
     "S": 0.5, "Cu": 0.004, "Fe": 0.03, "Mn": 0.025, "Zn": 0.01,
 }
 
-# Eficiencia de uso (solo aplica a S, Cu, Fe, Mn, Zn — los oficiales NO dividen)
 EFICIENCIA = {
     "S": 0.40, "Cu": 1.00, "Fe": 1.00, "Mn": 1.00, "Zn": 1.00,
 }
 
-# Delta: incremento foliar (%) para subir 1 unidad de ajuste
 DELTA = {
     "N": 0.1, "P": 0.1, "K": 0.50, "Ca": 0.01, "Mg": 0.01,
     "S": 0.01, "B": 0.0001, "Cu": 0.0001, "Fe": 0.0001, "Mn": 0.0001, "Zn": 0.0001,
 }
 
-# g/planta para subir 1 delta en el foliar
 G_PLANTA = {
     "N": 70, "P": 84, "K": 70, "Ca": 105, "Mg": 56,
     "S": 42, "B": 2.1, "Cu": 1.4, "Fe": 7.0, "Mn": 3.5, "Zn": 2.1,
@@ -114,13 +109,10 @@ N_PALMAS = 143
 MACRO_ELEMS = {"N", "P", "K", "Ca", "Mg", "S"}
 MICRO_ELEMS = {"B", "Cu", "Fe", "Mn", "Zn"}
 
-# Elementos con ecuación de regresión oficial (NO usan EXPORT_COEF)
 ELEMENTOS_OFICIALES = {"N", "P", "K", "Ca", "Mg", "B"}
 
-# Todos los elementos a calcular
 ELEMENTOS_CALCULO = ["N", "P", "K", "Ca", "Mg", "S", "B", "Cu", "Fe", "Mn", "Zn"]
 
-# Coeficientes de regresión db_* = a * ton/ha + b
 DB_COEF_GUINEENSIS = {
     "N":  (5.8305,   -0.1165),
     "P":  (4.3580,   -0.1892),
@@ -139,7 +131,6 @@ DB_COEF_HIBRIDO = {
     "B":  (0.014119, -0.000262),
 }
 
-# Curvas de producción por edad (AGROPALMA)
 CURVA_PROD_BMP = {
     3: 6.739, 4: 9.499, 5: 12.19, 6: 14.812, 7: 17.48,
     8: 20.70, 9: 23.0,  10: 25.07, 11: 26.45, 12: 26.97,
@@ -420,71 +411,314 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None):
 
 
 def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ejecuta el motor de cálculo fila a fila.
+
+    Resultados generados:
+    - Demanda bruta: db_{elemento}_kg_ha
+    - Demanda ajustada: da_{elemento}_kg_ha
+    - Recomendación final: nec_{elemento}_kg_ha
+    - Recomendación final por lote: nec_{elemento}_kg_lote
+    - Demanda ajustada por lote para elementos oficiales:
+      da_{elemento}_kg_lote
+    - Demanda ajustada por palma:
+      da_{elemento}_g_palma
+    - Suma de demanda ajustada por palma:
+      total_g_palma
+    """
+
     df = df.copy()
 
-    edad_col     = find_col(df.columns, ["edad", "age", "anos", "ano_planta", "idade"])
-    rff_col      = find_col(df.columns, ["ton_ha", "ton/ha", "rff", "cff", "produtividade", "productividad"])
-    variedad_col = find_col(df.columns, ["variedad", "variety", "cultivar"])
-    material_col = find_col(df.columns, ["material", "material_genetico", "genetica"])
-    flag_col     = find_col(df.columns, ["0g_1h", "og_1h", "flag_0g_1h", "tipo_material"])
+    # ────────────────────────────────────────────────
+    # Columnas de identificación y cálculo
+    # ────────────────────────────────────────────────
 
-    rff_res, fuente_res, especie_res, flag_res = [], [], [], []
+    edad_col = find_col(
+        df.columns,
+        ["edad", "age", "anos", "ano_planta", "idade", "idade_ano"],
+    )
+
+    rff_col = find_col(
+        df.columns,
+        [
+            "ton_ha",
+            "ton/ha",
+            "ton ha",
+            "t_ha",
+            "rff",
+            "cff",
+            "produtividade",
+            "productividad",
+            "produccion_ha",
+            "estimativa_cff_t_ha",
+        ],
+    )
+
+    variedad_col = find_col(
+        df.columns,
+        ["variedad", "variety", "cultivar", "tipo_variedad"],
+    )
+
+    material_col = find_col(
+        df.columns,
+        ["material", "material_genetico", "genetica", "origen_material"],
+    )
+
+    flag_col = find_col(
+        df.columns,
+        [
+            "0g_1h",
+            "og_1h",
+            "g_h",
+            "flag_0g_1h",
+            "tipo_material",
+            "indicador_0g_1h",
+        ],
+    )
+
+    area_col = find_col(
+        df.columns,
+        ["area", "ha", "hectareas", "superficie"],
+    )
+
+    n_palmas_col = find_col(
+        df.columns,
+        [
+            "n_palmas",
+            "numero_palmas",
+            "palmas",
+            "plantas",
+            "plantas_ha",
+        ],
+    )
+
+    # ────────────────────────────────────────────────
+    # RFF, especie e indicador 0G/1H
+    # ────────────────────────────────────────────────
+
+    rff_res = []
+    fuente_res = []
+    especie_res = []
+    flag_res = []
 
     for _, row in df.iterrows():
-        rff, fuente = obtener_rff_calculo(row, rff_col, edad_col)
-        variedad = row.get(variedad_col, "") if variedad_col else ""
-        material = row.get(material_col, "") if material_col else ""
-        flag = get_flag_0g_1h(row, flag_col, variedad_col, material_col)
-        especie = determinar_especie(variedad, material, flag)
+
+        rff, fuente = obtener_rff_calculo(
+            row,
+            rff_col=rff_col,
+            edad_col=edad_col,
+        )
+
+        variedad = (
+            row.get(variedad_col, "")
+            if variedad_col is not None
+            else ""
+        )
+
+        material = (
+            row.get(material_col, "")
+            if material_col is not None
+            else ""
+        )
+
+        flag = get_flag_0g_1h(
+            row,
+            flag_col=flag_col,
+            variedad_col=variedad_col,
+            material_col=material_col,
+        )
+
+        especie = determinar_especie(
+            variedad=variedad,
+            material=material,
+            indicador_0g_1h=flag,
+        )
+
         rff_res.append(round(rff, 3))
         fuente_res.append(fuente)
         especie_res.append(especie)
         flag_res.append(flag)
 
     df["rff_calculo"] = rff_res
-    df["fuente_rff"]  = fuente_res
-    df["especie"]     = especie_res
-    df["flag_0g_1h"]  = flag_res
+    df["fuente_rff"] = fuente_res
+    df["especie"] = especie_res
+    df["flag_0g_1h"] = flag_res
+
+    # ────────────────────────────────────────────────
+    # Cálculo nutricional por elemento
+    # ────────────────────────────────────────────────
 
     for elem in ELEMENTOS_CALCULO:
+
         fol_col = find_col(
             df.columns,
-            [f"fol_{elem.lower()}", f"{elem}_f", f"{elem.lower()}_f",
-             f"{elem}_fol", f"{elem.lower()}_fol", f"foliar_{elem.lower()}"],
+            [
+                f"fol_{elem.lower()}",
+                f"{elem}_f",
+                f"{elem.lower()}_f",
+                f"{elem}_fol",
+                f"{elem.lower()}_fol",
+                f"foliar_{elem.lower()}",
+            ],
         )
 
-        fol_res, db_res, da_res, rec_res, fator_res, status_res = [], [], [], [], [], []
+        fol_res = []
+        db_res = []
+        da_res = []
+        rec_res = []
+        fator_res = []
+        status_res = []
 
         for _, row in df.iterrows():
-            rff  = row["rff_calculo"]
-            flag = row["flag_0g_1h"]
 
-            val_orig = row.get(fol_col, np.nan) if fol_col and fol_col in df.columns else np.nan
-            val_pct  = foliar_a_pct(val_orig, elem)
+            rff = to_float_safe(
+                row.get("rff_calculo", np.nan),
+                default=np.nan,
+            )
 
-            db  = calc_demanda_bruta(elem, rff, flag)
-            da  = calc_demanda_ajustada(elem, val_pct, db)
-            rec = calc_recomendacion_final(da, elem)
+            flag = to_float_safe(
+                row.get("flag_0g_1h", 0),
+                default=0,
+            )
 
-            fator  = calc_fator_reajuste(val_pct, elem)
-            status, _ = get_foliar_status(val_pct, elem)
+            val_orig = (
+                row.get(fol_col, np.nan)
+                if fol_col is not None and fol_col in df.columns
+                else np.nan
+            )
 
-            fol_res.append(round(val_pct, 8) if not pd.isna(val_pct) else np.nan)
-            db_res.append(round(db, 6))
-            da_res.append(round(da, 6))
-            rec_res.append(round(rec, 6))
+            val_pct = foliar_a_pct(val_orig, elem)
+
+            demanda_bruta = calc_demanda_bruta(
+                elem=elem,
+                rff=rff,
+                flag_0g_1h=flag,
+            )
+
+            demanda_ajustada = calc_demanda_ajustada(
+                elem=elem,
+                val_pct=val_pct,
+                demanda_bruta=demanda_bruta,
+            )
+
+            recomendacion_final = calc_recomendacion_final(
+                demanda_ajustada=demanda_ajustada,
+                elem=elem,
+            )
+
+            fator = calc_fator_reajuste(
+                val_pct=val_pct,
+                elem=elem,
+            )
+
+            status, _ = get_foliar_status(
+                val_pct=val_pct,
+                elem=elem,
+            )
+
+            fol_res.append(
+                round(val_pct, 8)
+                if not pd.isna(val_pct)
+                else np.nan
+            )
+
+            db_res.append(round(demanda_bruta, 6))
+            da_res.append(round(demanda_ajustada, 6))
+            rec_res.append(round(recomendacion_final, 6))
             fator_res.append(fator)
             status_res.append(status)
 
-        df[f"fol_pct_{elem.lower()}"]    = fol_res
-        df[f"db_{elem.lower()}_kg_ha"]   = db_res
-        df[f"da_{elem.lower()}_kg_ha"]   = da_res
-        df[f"nec_{elem.lower()}_kg_ha"]  = rec_res   # output final para exportar
-        df[f"fator_{elem.lower()}"]      = fator_res
-        df[f"status_{elem.lower()}"]     = status_res
+        # Resultados internos en kg/ha
+        df[f"fol_pct_{elem.lower()}"] = fol_res
+        df[f"db_{elem.lower()}_kg_ha"] = db_res
+        df[f"da_{elem.lower()}_kg_ha"] = da_res
+
+        # Recomendación final interna en kg/ha
+        df[f"nec_{elem.lower()}_kg_ha"] = rec_res
+
+        df[f"fator_{elem.lower()}"] = fator_res
+        df[f"status_{elem.lower()}"] = status_res
+
+    # ────────────────────────────────────────────────
+    # Normalización de área y número de palmas
+    # ────────────────────────────────────────────────
+
+    if area_col is not None and area_col in df.columns:
+        area_serie = df[area_col].apply(
+            lambda x: to_float_safe(x, default=np.nan)
+        )
+    else:
+        area_serie = pd.Series(
+            np.nan,
+            index=df.index,
+            dtype="float64",
+        )
+
+    if n_palmas_col is not None and n_palmas_col in df.columns:
+        n_palmas_serie = df[n_palmas_col].apply(
+            lambda x: to_float_safe(x, default=np.nan)
+        )
+    else:
+        n_palmas_serie = pd.Series(
+            np.nan,
+            index=df.index,
+            dtype="float64",
+        )
+
+    area_serie = area_serie.replace([np.inf, -np.inf, 0], np.nan)
+    n_palmas_serie = n_palmas_serie.replace([np.inf, -np.inf, 0], np.nan)
+
+    for elem in ELEMENTOS_CALCULO:
+
+        nec_ha_col = f"nec_{elem.lower()}_kg_ha"
+
+        if nec_ha_col not in df.columns:
+            continue
+
+        nec_lote = df[nec_ha_col] * area_serie
+
+        df[f"nec_{elem.lower()}_kg_lote"] = nec_lote.round(6)
+
+    elementos_oficiales_ordenados = [
+        elem
+        for elem in ["N", "P", "K", "Ca", "Mg", "B"]
+        if elem in ELEMENTOS_OFICIALES
+    ]
+
+    g_palma_cols = []
+
+    for elem in elementos_oficiales_ordenados:
+
+        da_ha_col = f"da_{elem.lower()}_kg_ha"
+
+        if da_ha_col not in df.columns:
+            continue
+
+        da_lote = df[da_ha_col] * area_serie
+
+        df[f"da_{elem.lower()}_kg_lote"] = da_lote.round(6)
+
+        da_g_palma = (
+            da_lote
+            / n_palmas_serie
+            * 1000.0
+        )
+
+        g_palma_col = f"da_{elem.lower()}_g_palma"
+
+        df[g_palma_col] = da_g_palma.round(6)
+        g_palma_cols.append(g_palma_col)
+
+    if g_palma_cols:
+        df["total_g_palma"] = (
+            df[g_palma_cols]
+            .sum(axis=1, min_count=1)
+            .round(6)
+        )
+    else:
+        df["total_g_palma"] = np.nan
 
     return df
-
 
 # ════════════════════════════════════════════════════
 # 4. KPIs Y HELPERS
@@ -779,14 +1013,14 @@ def tab_resumen(df: pd.DataFrame):
 
     rows = []
     for elem in elementos:
-        fol_col = f"fol_{elem.lower()}"
+        fol_col = f"fol_pct_{elem.lower()}"
         sta_col = f"status_{elem.lower()}"
         nec_col = f"nec_{elem.lower()}_kg_ha"
         r = FOLIAR_RANGES[elem]
 
-        vals = df[fol_col].dropna()
+        vals = df[fol_col].dropna() if fol_col in df.columns else pd.Series(dtype=float)
         media = vals.mean() if len(vals) > 0 else np.nan
-        status, label = get_foliar_status(foliar_a_pct(media, elem), elem)
+        status, label = get_foliar_status(media, elem)
         nec_media = df[nec_col].mean() if nec_col in df.columns else np.nan
 
         dist = df[sta_col].value_counts() if sta_col in df.columns else pd.Series()
@@ -833,28 +1067,69 @@ def tab_resumen(df: pd.DataFrame):
 def tab_exportar(df: pd.DataFrame):
 
     elementos = [e for e in ELEMENTOS_CALCULO if f"fol_pct_{e.lower()}" in df.columns]
+    oficiales = [e for e in ["N", "P", "K", "Ca", "Mg", "B"] if e in ELEMENTOS_OFICIALES]
 
-    lote_col     = find_col(df.columns, ["lote"])
-    finca_col    = find_col(df.columns, ["finca"])
-    edad_col     = find_col(df.columns, ["edad"])
-    material_col = find_col(df.columns, ["material"])
-    variedad_col = find_col(df.columns, ["variedad"])
-    rff_col      = find_col(df.columns, ["ton_ha", "rff"])
+    lote_col         = find_col(df.columns, ["lote"])
+    finca_col        = find_col(df.columns, ["finca"])
+    departamento_col = find_col(df.columns, ["departamento"])
+    edad_col         = find_col(df.columns, ["edad"])
+    material_col     = find_col(df.columns, ["material"])
+    variedad_col     = find_col(df.columns, ["variedad"])
+    manejo_col       = find_col(df.columns, ["manejo"])
+    rff_col          = find_col(df.columns, ["ton_ha", "rff"])
+    area_col         = find_col(df.columns, ["area", "ha", "hectareas", "superficie"])
+    n_palmas_col     = find_col(df.columns, ["n_palmas", "numero_palmas", "palmas", "plantas"])
 
-    id_cols  = [c for c in [lote_col, finca_col, edad_col, material_col, variedad_col, rff_col] if c]
-    nec_cols = [f"nec_{e.lower()}_kg_ha" for e in elementos if f"nec_{e.lower()}_kg_ha" in df.columns]
-    sta_cols = [f"status_{e.lower()}"    for e in elementos if f"status_{e.lower()}"    in df.columns]
+    id_cols = [
+        c for c in [
+            lote_col, finca_col, departamento_col, edad_col,
+            material_col, variedad_col, manejo_col, rff_col,
+            area_col, n_palmas_col,
+        ] if c
+    ]
 
-    df_export = df[id_cols + nec_cols + sta_cols].copy()
+    # ─── Columnas oficiales: kg/ha, kg/lote, g/palma ───
+    da_ha_cols   = [f"da_{e.lower()}_kg_ha"   for e in oficiales if f"da_{e.lower()}_kg_ha"   in df.columns]
+    da_lote_cols = [f"da_{e.lower()}_kg_lote" for e in oficiales if f"da_{e.lower()}_kg_lote" in df.columns]
+    g_palma_cols = [f"da_{e.lower()}_g_palma" for e in oficiales if f"da_{e.lower()}_g_palma" in df.columns]
+    total_col    = ["total_g_palma"] if "total_g_palma" in df.columns else []
 
+    # ─── Columnas no oficiales: recomendación en kg/lote ───
+    no_oficiales = [e for e in elementos if e not in oficiales]
+    nec_lote_cols = [f"nec_{e.lower()}_kg_lote" for e in no_oficiales if f"nec_{e.lower()}_kg_lote" in df.columns]
+
+    sta_cols = [f"status_{e.lower()}" for e in elementos if f"status_{e.lower()}" in df.columns]
+
+    cols_export = id_cols + da_ha_cols + da_lote_cols + g_palma_cols + total_col + nec_lote_cols + sta_cols
+    df_export = df[[c for c in cols_export if c in df.columns]].copy()
+
+    # ─── Renombrado con nomenclatura del Excel de referencia ───
     rename = {}
-    for e in elementos:
-        nc = f"nec_{e.lower()}_kg_ha"
-        sc = f"status_{e.lower()}"
-        if nc in df_export.columns:
-            rename[nc] = f"Rec_{e} (kg/ha)"
+    for e in oficiales:
+        ha_c   = f"da_{e.lower()}_kg_ha"
+        lote_c = f"da_{e.lower()}_kg_lote"
+        gp_c   = f"da_{e.lower()}_g_palma"
+        sc     = f"status_{e.lower()}"
+        if ha_c in df_export.columns:
+            rename[ha_c] = f"da_{e} (kg/ha)"
+        if lote_c in df_export.columns:
+            rename[lote_c] = f"da_{e}_lote (kg)"
+        if gp_c in df_export.columns:
+            rename[gp_c] = f"da_{e}/palma (g)"
         if sc in df_export.columns:
             rename[sc] = f"Estado_{e}"
+
+    for e in no_oficiales:
+        nc = f"nec_{e.lower()}_kg_lote"
+        sc = f"status_{e.lower()}"
+        if nc in df_export.columns:
+            rename[nc] = f"Rec_{e} (kg/lote)"
+        if sc in df_export.columns:
+            rename[sc] = f"Estado_{e}"
+
+    if "total_g_palma" in df_export.columns:
+        rename["total_g_palma"] = "total_palma (g)"
+
     df_export = df_export.rename(columns=rename)
 
     st.markdown('<div class="section-title">Vista previa — Resultados de Fertilización</div>', unsafe_allow_html=True)
@@ -866,10 +1141,7 @@ def tab_exportar(df: pd.DataFrame):
             sel_finca_exp = st.multiselect(
                 "Filtrar por finca:", fincas_disp, default=fincas_disp, key="exp_finca_filter"
             )
-            if sel_finca_exp:
-                df_export_view = df_export[df_export[finca_col].isin(sel_finca_exp)]
-            else:
-                df_export_view = df_export
+            df_export_view = df_export[df_export[finca_col].isin(sel_finca_exp)] if sel_finca_exp else df_export
         else:
             df_export_view = df_export
 
