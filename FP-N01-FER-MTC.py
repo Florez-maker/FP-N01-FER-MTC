@@ -131,21 +131,13 @@ DB_COEF_HIBRIDO = {
     "B":  (0.014119, -0.000262),
 }
 
-CURVA_PROD_BMP = {
-    3: 6.739, 4: 9.499, 5: 12.19, 6: 14.812, 7: 17.48,
-    8: 20.70, 9: 23.0,  10: 25.07, 11: 26.45, 12: 26.97,
-    13: 26.97, 14: 26.97, 15: 26.96, 16: 26.68, 17: 26.61,
-    18: 25.88, 19: 25.30, 20: 24.50, 21: 23.46, 22: 22.66,
-    23: 20.70, 24: 19.21, 25: 17.83,
-}
-
-CURVA_PROD_SIN_BMP = {
-    3: 5.86, 4: 8.26, 5: 10.6, 6: 12.88, 7: 15.2,
-    8: 18.0, 9: 20.0, 10: 21.8, 11: 23.0, 12: 23.45,
-    13: 23.45, 14: 23.45, 15: 23.44, 16: 23.2, 17: 23.14,
-    18: 22.5, 19: 22.0, 20: 21.3, 21: 20.4, 22: 19.7,
-    23: 18.0, 24: 16.7, 25: 15.5,
-}
+# Curvas de producción modelada por edad (x = edad en años, y = ton/ha).
+# Regla operativa: para edades > 26 años, la producción modelada queda limitada
+# a máximo 14 ton/ha.
+PROD_COEF_GUINEENSIS = (-0.1283, 4.0247, -3.9629)
+PROD_COEF_HIBRIDO = (-0.1450, 4.5496, -4.4798)
+PROD_MAX_MAYOR_26 = 14.0
+PROD_DEFAULT = 20.0
 
 # ════════════════════════════════════════════════════
 # 2. NORMALIZACIÓN Y CARGA — ROBUSTA
@@ -229,6 +221,7 @@ def cargar_dataset(file_bytes: bytes, file_name: str = "") -> pd.DataFrame:
         "lote":        ["lote", "block", "bloque", "codigo_lote", "cod_lote", "id_lote", "lote_id"],
         "finca":       ["finca", "fazenda", "farm", "hacienda"],
         "departamento":["departamento", "depto", "zona", "region"],
+        "manejo": ["manejo", "Manejo"],
         "siembra":     ["siembra", "ano_siembra", "anio_siembra", "planting_year"],
         "edad":        ["edad", "age", "anos", "ano_planta", "idade", "idade_ano"],
         "variedad":    ["variedad", "variety", "cultivar", "tipo_variedad"],
@@ -272,7 +265,7 @@ def cargar_dataset(file_bytes: bytes, file_name: str = "") -> pd.DataFrame:
 
     df = df.rename(columns=rename_map)
 
-    text_cols = {"finca", "lote", "zona", "departamento", "variedad", "material"}
+    text_cols = {"finca", "lote", "departamento", "variedad", "material", "manejo"}
     for col in df.columns:
         if col in text_cols:
             df[col] = df[col].astype(str).str.strip().str.upper()
@@ -290,12 +283,15 @@ def determinar_especie(variedad="", material="", indicador_0g_1h=np.nan):
     ind = to_float_safe(indicador_0g_1h, default=np.nan)
     if not pd.isna(ind):
         return "Guineensis" if int(ind) == 0 else "Hibrido_OxG"
-    v = str(variedad).strip().lower()
-    m = str(material).strip().lower()
-    if any(x in v or x in m for x in ["hibrido", "híbrido", "oxg"]):
+
+    texto = f"{variedad} {material}".strip().lower()
+
+    if any(x in texto for x in ["hibrido", "híbrido", "hybrid", "oxg", "clone", "clon"]):
         return "Hibrido_OxG"
-    if any(x in v or x in m for x in ["tenera", "dura", "pisifera", "guineensis", "deli", "nigeria", "ghana"]):
+
+    if any(x in texto for x in ["tenera", "dura", "pisifera", "guineensis", "deli", "nigeria", "ghana"]):
         return "Guineensis"
+
     return "No_identificado"
 
 
@@ -311,11 +307,6 @@ def get_flag_0g_1h(row, flag_col=None, variedad_col=None, material_col=None):
 
 
 def foliar_a_pct(valor, elem):
-    """
-    Conversión foliar a % según el Excel de referencia:
-    - Todos los elementos del dataset (N_f, P_f, K_f, Ca_f, Mg_f, B_f) → /10
-    - S, Cu, Fe, Mn, Zn (micros reales) → /10000
-    """
     if pd.isna(valor):
         return np.nan
     valor = to_float_safe(valor, default=np.nan)
@@ -390,24 +381,43 @@ def calc_recomendacion_final(demanda_ajustada, elem):
     return max(0.0, demanda_ajustada / ef)
 
 
-def get_rff_esperado(edad, bmp=True):
+def calcular_produccion_modelada(edad, especie="No_identificado"):
     edad = to_float_safe(edad, default=np.nan)
     if pd.isna(edad):
-        return 20.0
-    edad = int(np.clip(edad, 3, 25))
-    return CURVA_PROD_BMP.get(edad, 20.0) if bmp else CURVA_PROD_SIN_BMP.get(edad, 18.0)
+        return np.nan
+
+    especie_txt = str(especie).strip().lower()
+    if especie_txt == "guineensis":
+        a, b, c = PROD_COEF_GUINEENSIS
+    elif especie_txt in {"hibrido_oxg", "hibrido", "híbrido", "clone", "clon"}:
+        a, b, c = PROD_COEF_HIBRIDO
+    else:
+        return np.nan
+
+    prod = a * (edad ** 2) + b * edad + c
+    prod = max(0.0, prod)
+
+    if edad > 26:
+        prod = min(prod, PROD_MAX_MAYOR_26)
+
+    return round(prod, 3)
 
 
-def obtener_rff_calculo(row, rff_col=None, edad_col=None):
+def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identificado"):
+    # Nueva regla: la producción para cálculo se modela por edad y especie.
+    if edad_col and edad_col in row.index:
+        edad = to_float_safe(row.get(edad_col, np.nan), default=np.nan)
+        rff_modelado = calcular_produccion_modelada(edad, especie=especie)
+        if not pd.isna(rff_modelado) and rff_modelado > 0:
+            return rff_modelado, "curva_variedad_edad"
+
+    # Respaldo si falta edad/especie: usar dato real si viene en el archivo.
     if rff_col and rff_col in row.index:
         rff = to_float_safe(row.get(rff_col, np.nan), default=np.nan)
         if not pd.isna(rff) and rff > 0:
-            return rff, "dato_real"
-    if edad_col and edad_col in row.index:
-        edad = to_float_safe(row.get(edad_col, np.nan), default=np.nan)
-        if not pd.isna(edad):
-            return get_rff_esperado(edad), "curva_edad"
-    return 20.0, "respaldo"
+            return rff, "dato_real_respaldo"
+
+    return PROD_DEFAULT, "respaldo"
 
 
 def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
@@ -500,14 +510,10 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
     fuente_res = []
     especie_res = []
     flag_res = []
+    prod_obs_res = []
+    prod_mod_res = []
 
     for _, row in df.iterrows():
-
-        rff, fuente = obtener_rff_calculo(
-            row,
-            rff_col=rff_col,
-            edad_col=edad_col,
-        )
 
         variedad = (
             row.get(variedad_col, "")
@@ -534,11 +540,27 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
             indicador_0g_1h=flag,
         )
 
+        edad_val = row.get(edad_col, np.nan) if edad_col is not None else np.nan
+        prod_modelada = calcular_produccion_modelada(edad_val, especie=especie)
+        prod_observada = row.get(rff_col, np.nan) if rff_col is not None else np.nan
+        prod_observada = to_float_safe(prod_observada, default=np.nan)
+
+        rff, fuente = obtener_rff_calculo(
+            row,
+            rff_col=rff_col,
+            edad_col=edad_col,
+            especie=especie,
+        )
+
         rff_res.append(round(rff, 3))
         fuente_res.append(fuente)
         especie_res.append(especie)
         flag_res.append(flag)
+        prod_obs_res.append(round(prod_observada, 3) if not pd.isna(prod_observada) else np.nan)
+        prod_mod_res.append(round(prod_modelada, 3) if not pd.isna(prod_modelada) else np.nan)
 
+    df["ton_ha_observada"] = prod_obs_res
+    df["ton_ha_modelada"] = prod_mod_res
     df["rff_calculo"] = rff_res
     df["fuente_rff"] = fuente_res
     df["especie"] = especie_res
@@ -735,7 +757,7 @@ def kpi_card(col, label, value, sub="", icon="", color="#1b60a7"):
 
 def seccion_kpis(df: pd.DataFrame):
     edad_col  = find_col(df.columns, ["edad", "age"])
-    rff_col   = find_col(df.columns, ["ton_ha", "rff"])
+    rff_col   = find_col(df.columns, ["rff_calculo", "ton_ha_modelada", "ton_ha", "rff"])
     finca_col = find_col(df.columns, ["finca"])
     lote_col  = find_col(df.columns, ["lote"])
 
@@ -1066,123 +1088,404 @@ def tab_resumen(df: pd.DataFrame):
 
 def tab_exportar(df: pd.DataFrame):
 
-    elementos = [e for e in ELEMENTOS_CALCULO if f"fol_pct_{e.lower()}" in df.columns]
-    oficiales = [e for e in ["N", "P", "K", "Ca", "Mg", "B"] if e in ELEMENTOS_OFICIALES]
-
-    lote_col         = find_col(df.columns, ["lote"])
-    finca_col        = find_col(df.columns, ["finca"])
-    departamento_col = find_col(df.columns, ["departamento"])
-    edad_col         = find_col(df.columns, ["edad"])
-    material_col     = find_col(df.columns, ["material"])
-    variedad_col     = find_col(df.columns, ["variedad"])
-    manejo_col       = find_col(df.columns, ["manejo"])
-    rff_col          = find_col(df.columns, ["ton_ha", "rff"])
-    area_col         = find_col(df.columns, ["area", "ha", "hectareas", "superficie"])
-    n_palmas_col     = find_col(df.columns, ["n_palmas", "numero_palmas", "palmas", "plantas"])
-
-    id_cols = [
-        c for c in [
-            lote_col, finca_col, departamento_col, edad_col,
-            material_col, variedad_col, manejo_col, rff_col,
-            area_col, n_palmas_col,
-        ] if c
+    elementos = [
+        e for e in ELEMENTOS_CALCULO
+        if f"fol_pct_{e.lower()}" in df.columns
     ]
 
-    # ─── Columnas oficiales: kg/ha, kg/lote, g/palma ───
-    da_ha_cols   = [f"da_{e.lower()}_kg_ha"   for e in oficiales if f"da_{e.lower()}_kg_ha"   in df.columns]
-    da_lote_cols = [f"da_{e.lower()}_kg_lote" for e in oficiales if f"da_{e.lower()}_kg_lote" in df.columns]
-    g_palma_cols = [f"da_{e.lower()}_g_palma" for e in oficiales if f"da_{e.lower()}_g_palma" in df.columns]
-    total_col    = ["total_g_palma"] if "total_g_palma" in df.columns else []
+    oficiales = [
+        e for e in ["N", "P", "K", "Ca", "Mg", "B"]
+        if e in ELEMENTOS_OFICIALES
+    ]
 
-    # ─── Columnas no oficiales: recomendación en kg/lote ───
-    no_oficiales = [e for e in elementos if e not in oficiales]
-    nec_lote_cols = [f"nec_{e.lower()}_kg_lote" for e in no_oficiales if f"nec_{e.lower()}_kg_lote" in df.columns]
+    # ────────────────────────────────────────────────
+    # Columnas de identificación
+    # ────────────────────────────────────────────────
 
-    sta_cols = [f"status_{e.lower()}" for e in elementos if f"status_{e.lower()}" in df.columns]
+    lote_col = find_col(
+        df.columns,
+        ["lote"]
+    )
 
-    cols_export = id_cols + da_ha_cols + da_lote_cols + g_palma_cols + total_col + nec_lote_cols + sta_cols
-    df_export = df[[c for c in cols_export if c in df.columns]].copy()
+    finca_col = find_col(
+        df.columns,
+        ["finca"]
+    )
 
-    # ─── Renombrado con nomenclatura del Excel de referencia ───
+    departamento_col = find_col(
+        df.columns,
+        ["departamento"]
+    )
+
+    edad_col = find_col(
+        df.columns,
+        ["edad"]
+    )
+
+    material_col = find_col(
+        df.columns,
+        ["material"]
+    )
+
+    variedad_col = find_col(
+        df.columns,
+        ["variedad"]
+    )
+
+    manejo_col = find_col(
+        df.columns,
+        ["manejo"]
+    )
+
+    area_col = find_col(
+        df.columns,
+        ["area", "ha", "hectareas", "superficie"]
+    )
+
+    n_palmas_col = find_col(
+        df.columns,
+        ["n_palmas", "numero_palmas", "palmas", "plantas"]
+    )
+
+    # ────────────────────────────────────────────────
+    # Columnas de producción
+    # ────────────────────────────────────────────────
+
+    columnas_produccion = [
+        "ton_ha_observada",
+        "ton_ha_modelada",
+        "rff_calculo",
+        "fuente_rff",
+        "especie",
+        "flag_0g_1h",
+    ]
+
+    columnas_produccion = [
+        c for c in columnas_produccion
+        if c in df.columns
+    ]
+
+    # ────────────────────────────────────────────────
+    # Columnas de identificación
+    # ────────────────────────────────────────────────
+
+    columnas_identificacion = [
+        lote_col,
+        finca_col,
+        departamento_col,
+        edad_col,
+        material_col,
+        variedad_col,
+        manejo_col,
+        area_col,
+        n_palmas_col,
+    ]
+
+    columnas_identificacion = [
+        c for c in columnas_identificacion
+        if c is not None and c in df.columns
+    ]
+
+    id_cols = columnas_identificacion + columnas_produccion
+
+    # ────────────────────────────────────────────────
+    # Elementos oficiales
+    # ────────────────────────────────────────────────
+
+    da_ha_cols = [
+        f"da_{e.lower()}_kg_ha"
+        for e in oficiales
+        if f"da_{e.lower()}_kg_ha" in df.columns
+    ]
+
+    da_lote_cols = [
+        f"da_{e.lower()}_kg_lote"
+        for e in oficiales
+        if f"da_{e.lower()}_kg_lote" in df.columns
+    ]
+
+    g_palma_cols = [
+        f"da_{e.lower()}_g_palma"
+        for e in oficiales
+        if f"da_{e.lower()}_g_palma" in df.columns
+    ]
+
+    total_col = (
+        ["total_g_palma"]
+        if "total_g_palma" in df.columns
+        else []
+    )
+
+    # ────────────────────────────────────────────────
+    # Elementos no oficiales
+    # ────────────────────────────────────────────────
+
+    no_oficiales = [
+        e for e in elementos
+        if e not in oficiales
+    ]
+
+    nec_lote_cols = [
+        f"nec_{e.lower()}_kg_lote"
+        for e in no_oficiales
+        if f"nec_{e.lower()}_kg_lote" in df.columns
+    ]
+
+    # ────────────────────────────────────────────────
+    # Estados de nutrientes
+    # ────────────────────────────────────────────────
+
+    sta_cols = [
+        f"status_{e.lower()}"
+        for e in elementos
+        if f"status_{e.lower()}" in df.columns
+    ]
+
+    # ────────────────────────────────────────────────
+    # DataFrame para exportación
+    # ────────────────────────────────────────────────
+
+    cols_export = (
+        id_cols
+        + da_ha_cols
+        + da_lote_cols
+        + g_palma_cols
+        + total_col
+        + nec_lote_cols
+        + sta_cols
+    )
+
+    # Quitar duplicados conservando el orden
+    cols_export = list(dict.fromkeys(cols_export))
+
+    # Conservar únicamente columnas existentes
+    cols_export = [
+        c for c in cols_export
+        if c in df.columns
+    ]
+
+    df_export = df[cols_export].copy()
+
+    # ────────────────────────────────────────────────
+    # Renombrado de columnas para exportación
+    # ────────────────────────────────────────────────
+
     rename = {}
+
+    # Producción
+    if "ton_ha_observada" in df_export.columns:
+        rename["ton_ha_observada"] = "ton_ha_observada"
+
+    if "ton_ha_modelada" in df_export.columns:
+        rename["ton_ha_modelada"] = "ton_ha_modelada"
+
+    if "rff_calculo" in df_export.columns:
+        rename["rff_calculo"] = "rff_calculo"
+
+    if "fuente_rff" in df_export.columns:
+        rename["fuente_rff"] = "fuente_rff"
+
+    if "especie" in df_export.columns:
+        rename["especie"] = "especie"
+
+    if "flag_0g_1h" in df_export.columns:
+        rename["flag_0g_1h"] = "flag_0g_1h"
+
+    # Nutrientes oficiales
     for e in oficiales:
-        ha_c   = f"da_{e.lower()}_kg_ha"
+
+        ha_c = f"da_{e.lower()}_kg_ha"
         lote_c = f"da_{e.lower()}_kg_lote"
-        gp_c   = f"da_{e.lower()}_g_palma"
-        sc     = f"status_{e.lower()}"
+        gp_c = f"da_{e.lower()}_g_palma"
+        status_c = f"status_{e.lower()}"
+
         if ha_c in df_export.columns:
             rename[ha_c] = f"da_{e} (kg/ha)"
+
         if lote_c in df_export.columns:
             rename[lote_c] = f"da_{e}_lote (kg)"
+
         if gp_c in df_export.columns:
             rename[gp_c] = f"da_{e}/palma (g)"
-        if sc in df_export.columns:
-            rename[sc] = f"Estado_{e}"
 
+        if status_c in df_export.columns:
+            rename[status_c] = f"Estado_{e}"
+
+    # Nutrientes no oficiales
     for e in no_oficiales:
-        nc = f"nec_{e.lower()}_kg_lote"
-        sc = f"status_{e.lower()}"
-        if nc in df_export.columns:
-            rename[nc] = f"Rec_{e} (kg/lote)"
-        if sc in df_export.columns:
-            rename[sc] = f"Estado_{e}"
+
+        nec_c = f"nec_{e.lower()}_kg_lote"
+        status_c = f"status_{e.lower()}"
+
+        if nec_c in df_export.columns:
+            rename[nec_c] = f"Rec_{e} (kg/lote)"
+
+        if status_c in df_export.columns:
+            rename[status_c] = f"Estado_{e}"
 
     if "total_g_palma" in df_export.columns:
         rename["total_g_palma"] = "total_palma (g)"
 
     df_export = df_export.rename(columns=rename)
 
-    st.markdown('<div class="section-title">Vista previa — Resultados de Fertilización</div>', unsafe_allow_html=True)
+    # ────────────────────────────────────────────────
+    # Vista previa
+    # ────────────────────────────────────────────────
+
+    st.markdown(
+        '<div class="section-title">'
+        'Vista previa — Resultados de Fertilización'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     c_filtro1, c_filtro2 = st.columns([1, 3])
+
     with c_filtro1:
+
+        # Se utiliza el nombre real de la columna detectada.
+        # Esto evita asumir que la columna se llama exactamente "finca".
         if finca_col and finca_col in df_export.columns:
-            fincas_disp = sorted(df_export[finca_col].dropna().unique().tolist())
-            sel_finca_exp = st.multiselect(
-                "Filtrar por finca:", fincas_disp, default=fincas_disp, key="exp_finca_filter"
+
+            fincas_disp = sorted(
+                df_export[finca_col]
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
             )
-            df_export_view = df_export[df_export[finca_col].isin(sel_finca_exp)] if sel_finca_exp else df_export
+
+            sel_finca_exp = st.multiselect(
+                "Filtrar por finca:",
+                options=fincas_disp,
+                default=fincas_disp,
+                key="exp_finca_filter",
+            )
+
+            if sel_finca_exp:
+                df_export_view = df_export[
+                    df_export[finca_col]
+                    .astype(str)
+                    .isin(sel_finca_exp)
+                ].copy()
+            else:
+                df_export_view = df_export.copy()
+
         else:
-            df_export_view = df_export
+            df_export_view = df_export.copy()
 
     with c_filtro2:
-        estado_cols_disp = [c for c in df_export.columns if c.startswith("Estado_")]
-        if estado_cols_disp:
-            elem_foco = st.selectbox(
-                "Resaltar estado del nutriente:",
-                ["Ninguno"] + [c.replace("Estado_", "") for c in estado_cols_disp],
-                key="exp_estado_foco"
-            )
-        else:
-            elem_foco = "Ninguno"
 
-    def resaltar_estado(val):
-        v = str(val).lower()
-        if v == "critico":
-            return "background-color:#FDEDEC; color:#C0392B; font-weight:600;"
-        if v == "bajo":
-            return "background-color:#FEF9E7; color:#B9770E; font-weight:600;"
-        if v == "alto":
-            return "background-color:#EBF5FB; color:#1F618D; font-weight:600;"
-        if v == "optimo":
-            return "background-color:#EAFAF1; color:#1E8449; font-weight:600;"
+        estado_cols_disp = [
+            c for c in df_export.columns
+            if str(c).startswith("Estado_")
+        ]
+
+        if estado_cols_disp:
+
+            st.selectbox(
+                "Resaltar estado del nutriente:",
+                options=[
+                    "Ninguno"
+                ] + [
+                    c.replace("Estado_", "")
+                    for c in estado_cols_disp
+                ],
+                key="exp_estado_foco",
+            )
+
+    # ────────────────────────────────────────────────
+    # Formato condicional para estados
+    # ────────────────────────────────────────────────
+
+    def resaltar_estado(valor):
+
+        valor_normalizado = str(valor).strip().lower()
+
+        if valor_normalizado == "critico":
+            return (
+                "background-color:#FDEDEC;"
+                "color:#C0392B;"
+                "font-weight:600;"
+            )
+
+        if valor_normalizado == "bajo":
+            return (
+                "background-color:#FEF9E7;"
+                "color:#B9770E;"
+                "font-weight:600;"
+            )
+
+        if valor_normalizado == "alto":
+            return (
+                "background-color:#EBF5FB;"
+                "color:#1F618D;"
+                "font-weight:600;"
+            )
+
+        if valor_normalizado == "optimo":
+            return (
+                "background-color:#EAFAF1;"
+                "color:#1E8449;"
+                "font-weight:600;"
+            )
+
         return ""
 
     styler = df_export_view.round(3).style
-    estado_cols_present = [c for c in df_export_view.columns if c.startswith("Estado_")]
+
+    estado_cols_present = [
+        c for c in df_export_view.columns
+        if str(c).startswith("Estado_")
+    ]
+
     if estado_cols_present:
-        styler = styler.applymap(resaltar_estado, subset=estado_cols_present)
 
-    st.dataframe(styler, use_container_width=True, hide_index=True)
+        # Pandas 2.1 o superior
+        if hasattr(styler, "map"):
+            styler = styler.map(
+                resaltar_estado,
+                subset=estado_cols_present,
+            )
 
-    st.caption(f"Mostrando {len(df_export_view)} de {len(df_export)} lotes.")
+        # Compatibilidad con versiones anteriores
+        else:
+            styler = styler.applymap(
+                resaltar_estado,
+                subset=estado_cols_present,
+            )
 
-    st.markdown('<div class="section-title">Descargar resultados</div>', unsafe_allow_html=True)
+    # Compatible con Streamlit 1.45.1
+    st.dataframe(
+        styler,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        f"Mostrando {len(df_export_view)} "
+        f"de {len(df_export)} lotes."
+    )
+
+    # ────────────────────────────────────────────────
+    # Descargas
+    # ────────────────────────────────────────────────
+
+    st.markdown(
+        '<div class="section-title">'
+        'Descargar resultados'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     c1, c2 = st.columns(2)
 
     with c1:
-        csv_bytes = df_export.to_csv(index=False).encode("utf-8-sig")
+
+        csv_bytes = df_export.to_csv(
+            index=False
+        ).encode("utf-8-sig")
+
         st.download_button(
             label="📥 Descargar CSV",
             data=csv_bytes,
@@ -1192,15 +1495,30 @@ def tab_exportar(df: pd.DataFrame):
         )
 
     with c2:
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            df_export.to_excel(writer, index=False, sheet_name="Resultados")
-        buf.seek(0)
+
+        buffer_excel = io.BytesIO()
+
+        with pd.ExcelWriter(
+            buffer_excel,
+            engine="openpyxl"
+        ) as writer:
+
+            df_export.to_excel(
+                writer,
+                index=False,
+                sheet_name="Resultados",
+            )
+
+        buffer_excel.seek(0)
+
         st.download_button(
             label="📊 Descargar Excel",
-            data=buf.getvalue(),
+            data=buffer_excel.getvalue(),
             file_name="fertilizacion_resultados.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
             use_container_width=True,
         )
 
