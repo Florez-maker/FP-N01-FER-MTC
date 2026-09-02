@@ -152,18 +152,20 @@ PROD_DEFAULT = 20.0
 # ════════════════════════════════════════════════════
 
 FUENTES_KALINI = {
-    "N":  {"fuente": "Urea",          "aporte": 0.45},
-    "P":  {"fuente": "SPT",           "aporte": 0.46},
-    "K":  {"fuente": "KCl",           "aporte": 0.60},
-    "Ca": {"fuente": "Cal_dolomita",  "aporte": 0.35},
-    "Mg": {"fuente": "Kieserita",     "aporte": 0.25},
-    "B":  {"fuente": "Granubor",      "aporte": 0.15},
+    "N":  {"fuente": "Urea",         "aporte": 0.45},
+    "P":  {"fuente": "SPT",          "aporte": 0.46},
+    "K":  {"fuente": "KCl",          "aporte": 0.60},
+    "Ca": {"fuente": "Cal_dolomita", "aporte": 0.35},
+    # La Kieserita es fuente DUAL: aporta Mg (0.25) Y S (0.20).
+    "Mg": {"fuente": "Kieserita",    "aporte": 0.25, "aporte_secundario": {"S": 0.20}},
+    "B":  {"fuente": "Granubor",     "aporte": 0.15},
+    # El S restante (después de restar el que aporta la Kieserita) se cubre con Sulfato.
+    "S":  {"fuente": "Sulfato",      "aporte": 0.20},
 }
 
-# FIX 2: minúscula para coincidir con FUENTES_KALINI[e]["fuente"].lower()
-# La cal dolomita es enmienda/correctivo de pH y NO entra en el compuesto.
-# Si el equipo decide incluirla, cambiar a set() vacío.
 FUENTES_EXCLUIDAS_FORMULA = {"cal_dolomita"}
+
+ELEMENTOS_DESCOMPOSICION = ["N", "P", "K", "Ca", "Mg", "S", "B"]
 
 # ════════════════════════════════════════════════════
 # 2. NORMALIZACIÓN Y CARGA — ROBUSTA
@@ -216,9 +218,15 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
         "urea": ["fuente_urea_kg_ha", "urea_kg_ha", "urea (kg/ha)"],
         "spt": ["fuente_spt_kg_ha", "spt_kg_ha", "spt (kg/ha)"],
         "kcl": ["fuente_kcl_kg_ha", "kcl_kg_ha", "kcl (kg/ha)"],
-        "kieserita": ["fuente_kieserita_kg_ha", "kieserita_kg_ha"],
-        "granubor": ["fuente_granubor_kg_ha", "granubor_kg_ha"],
-        "cal_dolomita": ["fuente_cal_dolomita_kg_ha", "cal_dolomita_kg_ha", "cal dolomita (kg/ha)"],
+        "kieserita": ["fuente_kieserita_kg_ha", "kieserita_kg_ha", "kieserita (kg/ha)"],
+        "granubor": ["fuente_granubor_kg_ha", "granubor_kg_ha", "granubor (kg/ha)"],
+        # Variantes adicionales para cal dolomita (incluye 'calamita' por si aparece)
+        "cal_dolomita": [
+            "fuente_cal_dolomita_kg_ha", "cal_dolomita_kg_ha", "cal_dolomita (kg/ha)",
+            "cal dolomita (kg/ha)", "cal dolomita", "cal_dolomita", "calamita", "calamita_kg_ha",
+            "cal-dolomita", "cal dolomita kg/ha"
+        ],
+        "sulfato": ["fuente_sulfato_kg_ha", "sulfato_kg_ha", "sulfato (kg/ha)"],
     }
     for key, candidates in fuente_map_keys.items():
         found = None
@@ -227,14 +235,28 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
             if c:
                 found = c
                 break
-        if found:
-            df[f"Rec_{key}_kgha"] = pd.to_numeric(df[found], errors="coerce")
-            # kglote
-            if area_col in df.columns:
-                df[f"Rec_{key}_kglote"] = df[f"Rec_{key}_kgha"] * area_s
-            # gpalma
-            if n_palmas_col in df.columns and f"Rec_{key}_kglote" in df.columns:
-                df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_{key}_kglote"], n_palmas_s)
+        if not found:
+            df[f"Rec_{key}_kgha"] = np.nan
+            df[f"Rec_{key}_kglote"] = np.nan
+            df[f"Rec_{key}_gpalma"] = np.nan
+            continue
+
+        df[f"Rec_{key}_kgha"] = pd.to_numeric(df[found], errors="coerce")
+        # kglote
+        if area_col in df.columns:
+            df[f"Rec_{key}_kglote"] = df[f"Rec_{key}_kgha"] * area_s
+        else:
+            cand_lote = find_col(df.columns,
+                                 [found.replace(" (kg/ha)", "_lote (kg)"), found.replace("_kg_ha", "_kg_lote")])
+            if cand_lote:
+                df[f"Rec_{key}_kglote"] = pd.to_numeric(df[cand_lote], errors="coerce")
+            else:
+                df[f"Rec_{key}_kglote"] = np.nan
+        # gpalma
+        if n_palmas_col in df.columns:
+            df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_{key}_kglote"], n_palmas_s)
+        else:
+            df[f"Rec_{key}_gpalma"] = np.nan
 
     all_rec_gpalma = [c for c in df.columns if c.startswith("Rec_") and c.endswith("_gpalma")]
     if all_rec_gpalma:
@@ -533,32 +555,56 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identifica
 
 
 def descomponer_fuentes_kalini(df, area_serie, n_palmas_serie):
-
     df = df.copy()
-
     ha_cols, lote_cols, gpalma_cols = [], [], []
 
-    for elem, meta in FUENTES_KALINI.items():
+    aporte_secundario_acum = {}
+
+    orden = ["N", "P", "K", "Ca", "Mg", "B", "S"]
+
+    for elem in orden:
+        meta = FUENTES_KALINI.get(elem)
+        if not meta:
+            continue
         fuente_nombre = meta["fuente"]
         apor = to_float_safe(meta["aporte"], default=np.nan)
         da_ha_col = f"da_{elem.lower()}_kg_ha"
-
         if da_ha_col not in df.columns or pd.isna(apor) or apor <= 0:
             continue
 
         nombre_key = fuente_nombre.lower()
 
+        # Si otra fuente ya cubrió parte de este nutriente (caso del S vía Kieserita),
+        # se resta y se floor a 0 antes de dimensionar la fuente propia.
+        if elem in aporte_secundario_acum:
+            da_efectivo = (df[da_ha_col] - aporte_secundario_acum[elem]).clip(lower=0)
+        else:
+            da_efectivo = df[da_ha_col]
+
         ha_c = f"fuente_{nombre_key}_kg_ha"
         lo_c = f"fuente_{nombre_key}_kg_lote"
         gp_c = f"fuente_{nombre_key}_g_palma"
 
-        df[ha_c] = (df[da_ha_col] / apor).round(6)
+        df[ha_c] = (da_efectivo / apor).round(6)
         df[lo_c] = (df[ha_c] * area_serie).round(6)
         df[gp_c] = (df[lo_c] / n_palmas_serie * 1000.0).round(6)
 
         ha_cols.append(ha_c)
         lote_cols.append(lo_c)
         gpalma_cols.append(gp_c)
+
+        # Registrar aportes secundarios que esta fuente inyecta a OTROS nutrientes.
+        for sec_elem, sec_apor in meta.get("aporte_secundario", {}).items():
+            sec_apor = to_float_safe(sec_apor, default=np.nan)
+            if pd.isna(sec_apor) or sec_apor <= 0:
+                continue
+            aporte_kg_ha = df[ha_c] * sec_apor
+            if sec_elem in aporte_secundario_acum:
+                aporte_secundario_acum[sec_elem] = (
+                    aporte_secundario_acum[sec_elem] + aporte_kg_ha
+                )
+            else:
+                aporte_secundario_acum[sec_elem] = aporte_kg_ha
 
     if gpalma_cols:
         df["total_fuentes_g_palma"] = (
@@ -570,7 +616,7 @@ def descomponer_fuentes_kalini(df, area_serie, n_palmas_serie):
     compuesto_ha_cols = [
         c for c, key in zip(
             ha_cols,
-            [FUENTES_KALINI[e]["fuente"].lower() for e in FUENTES_KALINI]
+            [FUENTES_KALINI[e]["fuente"].lower() for e in orden if e in FUENTES_KALINI]
         )
         if key not in FUENTES_EXCLUIDAS_FORMULA
     ]
@@ -582,8 +628,7 @@ def descomponer_fuentes_kalini(df, area_serie, n_palmas_serie):
         df["total_compuesto_kg_ha"] = np.nan
 
     def formula_row(r):
-        idx = {e: f"da_{e.lower()}_kg_ha"
-               for e in ("N", "P", "K", "Mg", "B")}
+        idx = {e: f"da_{e.lower()}_kg_ha" for e in ("N", "P", "K", "Mg", "S", "B")}
         tot_c = r.get("total_compuesto_kg_ha", np.nan)
         if pd.isna(tot_c) or tot_c <= 0:
             return np.nan
@@ -592,10 +637,11 @@ def descomponer_fuentes_kalini(df, area_serie, n_palmas_serie):
             if pd.isna(v):
                 return 0
             return round(v / tot_c * 100)
-        return f"{pct('N')}-{pct('P')}-{pct('K')}-{pct('Mg')} MgO-{pct('B')} B"
+        # Formato legacy: N-P-K-MgO S-B  (el 4º número es MgO, "MgO-x" lo repite,
+        # "S-x" es el contenido de S, y "B" marca el cierre).
+        return f"{pct('N')}-{pct('P')}-{pct('K')}-{pct('Mg')} MgO-{pct('Mg')} S-{pct('S')} B"
 
     df["Formula_Kalini"] = df.apply(formula_row, axis=1)
-
     return df
 
 
@@ -758,13 +804,14 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
             continue
         df[f"nec_{elem.lower()}_kg_lote"] = (df[nec_ha_col] * area_serie).round(6)
 
-    elementos_oficiales_ordenados = [
-        elem for elem in ["N", "P", "K", "Ca", "Mg", "B"] if elem in ELEMENTOS_OFICIALES
+    elementos_descom_ordenados = [
+        elem for elem in ELEMENTOS_DESCOMPOSICION
+        if f"da_{elem.lower()}_kg_ha" in df.columns
     ]
 
     g_palma_cols = []
 
-    for elem in elementos_oficiales_ordenados:
+    for elem in elementos_descom_ordenados:
         da_ha_col = f"da_{elem.lower()}_kg_ha"
         if da_ha_col not in df.columns:
             continue
@@ -784,7 +831,7 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
 
     df = descomponer_fuentes_kalini(df, area_serie, n_palmas_serie)
     df = normalize_for_ui(df)
-    
+
     return df
 
 # ════════════════════════════════════════════════════
@@ -1299,11 +1346,12 @@ def _to_kg_palma_from_g_palma(g_palma_series):
     return (g_palma_series / 1000.0)
 
 def _round_cols(df, decimals_default=2, decimals_gpalma=4):
-    """Aplica redondeo: por defecto 2 dec, pero columnas *_gpalma -> 4 dec."""
+    """Aplica redondeo: por defecto 2 dec; *_gpalma y *_kgpalma -> 4 dec."""
     df = df.copy()
     for c in df.columns:
         if df[c].dtype in [np.float64, np.float32, float]:
-            if c.lower().endswith("_gpalma"):
+            cl = c.lower()
+            if cl.endswith("_gpalma") or cl.endswith("_kgpalma"):
                 df[c] = df[c].round(decimals_gpalma)
             else:
                 df[c] = df[c].round(decimals_default)
@@ -1337,12 +1385,45 @@ EXPORT_NAME_MAP_BASE = {
     "Formula_Kalini": "Formula (N-P-K-MgO-B)",
 }
 
+COLUMNAS_REC_ORDEN = [
+    # Demanda ajustada — kg/ha
+    "Rec_da_N_kgha", "Rec_da_P_kgha", "Rec_da_K_kgha", "Rec_da_Ca_kgha",
+    "Rec_da_Mg_kgha", "Rec_da_B_kgha", "Rec_da_S_kgha",
+    # Demanda ajustada — kg/lote
+    "Rec_da_N_kglote", "Rec_da_P_kglote", "Rec_da_K_kglote", "Rec_da_Ca_kglote",
+    "Rec_da_Mg_kglote", "Rec_da_B_kglote", "Rec_da_S_kglote",
+    # Demanda ajustada — g/palma
+    "Rec_da_N_gpalma", "Rec_da_P_gpalma", "Rec_da_K_gpalma", "Rec_da_Ca_gpalma",
+    "Rec_da_Mg_gpalma", "Rec_da_B_gpalma", "Rec_da_S_gpalma",
+    # Total nutrientes — kg/palma
+    "Rec_total_n_kgpalma",
+    # Fuentes comerciales — kg/ha
+    "Rec_urea_kgha", "Rec_SPT_kgha", "Rec_kcl_kgha", "Rec_kieserita_kgha",
+    "Rec_granubor_kgha",
+    # Fuentes comerciales — kg/lote
+    "Rec_urea_kglote", "Rec_SPT_kglote", "Rec_kcl_kglote", "Rec_kieserita_kglote",
+    "Rec_granubor_kglote",
+    # Fuentes comerciales — g/palma
+    "Rec_urea_gpalma", "Rec_SPT_gpalma", "Rec_kcl_gpalma", "Rec_kieserita_gpalma",
+    "Rec_granubor_gpalma",
+    # Total fuentes — kg/palma
+    "Rec_total_f_kgpalma",
+    # Fórmula compuesta
+    "Formula (N-P-K-MgO-B)",
+    # Cal dolomita (enmienda, fuera del compuesto)
+    "Rec_caldol_kgha", "Rec_caldol_gpalma", "Rec_caldol_kglote", "Rec_caldol_tonlote",
+]
+
+
 def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     """
-    Exportador estandarizado según plantilla 'Rec_...'.
+    Exportador estandarizado según plantilla 'Rec_...' con ORDEN FIJO de columnas.
     - Crea/normaliza columnas Rec_*
-    - Aplica redondeo: 2 dec por defecto, 4 dec para *_gpalma
-    - Genera Excel con hojas: Resultados, Evaluacion_Agronomica, Evaluacion_Administrativa, Agrupaciones, Resumen_Finca
+    - Convierte totales a kg/palma y agrega Rec_caldol_tonlote
+    - Ordena las columnas exactamente como COLUMNAS_REC_ORDEN
+    - Aplica redondeo: 2 dec por defecto, 4 dec para *_gpalma y *_kgpalma
+    - Genera Excel con hojas: Resultados, Evaluacion_Agronomica,
+      Evaluacion_Administrativa, Agrupaciones, Resumen_Finca
     """
     df = df.copy()
 
@@ -1356,11 +1437,7 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     area_s = df[area_col].apply(lambda x: to_float_safe(x, np.nan)) if area_col in df.columns else pd.Series(np.nan, index=df.index)
     n_palmas_s = df[n_palmas_col].apply(lambda x: to_float_safe(x, np.nan)) if n_palmas_col in df.columns else pd.Series(np.nan, index=df.index)
 
-    oficiales = [e for e in ["N","P","K","Ca","Mg","B","S"] if f"da_{e.lower()}_kg_ha" in df.columns or f"da_{e.lower()}_kg_ha" in [c.lower() for c in df.columns]]
-
-    oficiales = [e for e in ["N","P","K","Ca","Mg","B","S"] if any(find_col(df.columns, [f"da_{e.lower()}_kg_ha", f"da_{e.lower()} (kg/ha)", f"da_{e}_ (kg/ha)"]) for e in [e])]
-
-    for e in ["N","P","K","Ca","Mg","B","S"]:
+    for e in ["N", "P", "K", "Ca", "Mg", "B", "S"]:
         cand_ha = find_col(df.columns, [f"da_{e.lower()}_kg_ha", f"da_{e} (kg/ha)", f"da_{e.lower()} (kg/ha)"])
         cand_lote = find_col(df.columns, [f"da_{e.lower()}_kg_lote", f"da_{e}_lote (kg)", f"da_{e}_lote"])
         cand_gpalma = find_col(df.columns, [f"da_{e.lower()}_g_palma", f"da_{e}/palma (g)", f"da_{e}_/palma (g)", f"da_{e}/palma (g)".lower()])
@@ -1369,14 +1446,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             df[f"Rec_da_{e}_kgha"] = df[cand_ha].apply(lambda x: to_float_safe(x, np.nan))
         if cand_lote:
             df[f"Rec_da_{e}_kglote"] = df[cand_lote].apply(lambda x: to_float_safe(x, np.nan))
-        else:
-            if cand_ha and area_col in df.columns:
-                df[f"Rec_da_{e}_kglote"] = (df[cand_ha].apply(lambda x: to_float_safe(x, np.nan)) * area_s).replace([np.inf, -np.inf], np.nan)
+        elif cand_ha and area_col in df.columns:
+            df[f"Rec_da_{e}_kglote"] = (df[cand_ha].apply(lambda x: to_float_safe(x, np.nan)) * area_s).replace([np.inf, -np.inf], np.nan)
         if cand_gpalma:
             df[f"Rec_da_{e}_gpalma"] = df[cand_gpalma].apply(lambda x: to_float_safe(x, np.nan))
-        else:
-            if f"Rec_da_{e}_kglote" in df.columns and n_palmas_col in df.columns:
-                df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_da_{e}_kglote"], n_palmas_s)
+        elif f"Rec_da_{e}_kglote" in df.columns and n_palmas_col in df.columns:
+            df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_da_{e}_kglote"], n_palmas_s)
 
     gpal_cols = [c for c in df.columns if c.startswith("Rec_da_") and c.endswith("_gpalma")]
     if gpal_cols:
@@ -1389,6 +1464,7 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         "kieserita": ["fuente_kieserita_kg_ha", "kieserita (kg/ha)"],
         "granubor": ["fuente_granubor_kg_ha", "granubor (kg/ha)"],
         "cal_dolomita": ["fuente_cal_dolomita_kg_ha", "cal dolomita (kg/ha)", "cal_dolomita (kg/ha)"],
+        "sulfato": ["fuente_sulfato_kg_ha", "sulfato (kg/ha)", "sulfato_ (kg/ha)"],
     }
     for key, cands in fuente_map.items():
         found = None
@@ -1396,46 +1472,85 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             if find_col(df.columns, [cand]):
                 found = find_col(df.columns, [cand])
                 break
-        if found:
-            df[f"Rec_{key}_kgha"] = df[found].apply(lambda x: to_float_safe(x, np.nan))
-            df[f"Rec_{key}_kglote"] = None
-            if n_palmas_col in df.columns and area_col in df.columns:
-                cand_lote = find_col(df.columns, [found.replace(" (kg/ha)", "_lote (kg)"), found.replace("_kg_ha", "_kg_lote")])
-                if cand_lote:
-                    df[f"Rec_{key}_kglote"] = df[cand_lote].apply(lambda x: to_float_safe(x, np.nan))
-                else:
-                    df[f"Rec_{key}_kglote"] = df[f"Rec_{key}_kgha"] * area_s
-            else:
-                cand_lote_any = find_col(df.columns, [f"{key}_lote (kg)", f"{key}_lote"])
-                if cand_lote_any:
-                    df[f"Rec_{key}_kglote"] = df[cand_lote_any].apply(lambda x: to_float_safe(x, np.nan))
+        if not found:
+            continue
+        df[f"Rec_{key}_kgha"] = df[found].apply(lambda x: to_float_safe(x, np.nan))
 
-            if f"Rec_{key}_kglote" in df.columns and n_palmas_col in df.columns:
-                df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_{key}_kglote"], n_palmas_s)
+        cand_lote = find_col(df.columns, [found.replace(" (kg/ha)", "_lote (kg)"), found.replace("_kg_ha", "_kg_lote")])
+        if cand_lote:
+            df[f"Rec_{key}_kglote"] = df[cand_lote].apply(lambda x: to_float_safe(x, np.nan))
+        elif area_col in df.columns:
+            df[f"Rec_{key}_kglote"] = (df[f"Rec_{key}_kgha"] * area_s).replace([np.inf, -np.inf], np.nan)
+        else:
+            cand_lote_any = find_col(df.columns, [f"{key}_lote (kg)", f"{key}_lote"])
+            if cand_lote_any:
+                df[f"Rec_{key}_kglote"] = df[cand_lote_any].apply(lambda x: to_float_safe(x, np.nan))
 
-    fuente_g_cols = [c for c in df.columns if c.startswith("Rec_") and c.endswith("_gpalma") and any(k in c for k in ["urea","spt","kcl","kieserita","granubor","caldol","cal"])]
-    all_rec_gpalma = [c for c in df.columns if c.startswith("Rec_") and c.endswith("_gpalma")]
-    if all_rec_gpalma:
-        df["Rec_total_f_gpalma"] = df[all_rec_gpalma].sum(axis=1, min_count=1)
+        if f"Rec_{key}_kglote" in df.columns and n_palmas_col in df.columns:
+            df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_{key}_kglote"], n_palmas_s)
+
+    spt_variants = [c for c in df.columns if re.match(r"rec[_\-]*spt[_\-]*", c, re.I)]
+    for c in spt_variants:
+        df = df.rename(columns={c: c.upper().replace("REC_", "Rec_").replace("-", "_")})
+    if "Rec_spt_kgha" in df.columns:
+        df = df.rename(columns={"Rec_spt_kgha": "Rec_SPT_kgha"})
+    if "Rec_spt_kglote" in df.columns:
+        df = df.rename(columns={"Rec_spt_kglote": "Rec_SPT_kglote"})
+    if "Rec_spt_gpalma" in df.columns:
+        df = df.rename(columns={"Rec_spt_gpalma": "Rec_SPT_gpalma"})
+
+    if "Formula_Kalini" in df.columns and "Formula (N-P-K-MgO-B)" not in df.columns:
+        df["Formula (N-P-K-MgO-B)"] = df["Formula_Kalini"]
+
+    if "Rec_total_n_gpalma" in df.columns:
+        df["Rec_total_n_kgpalma"] = (
+            pd.to_numeric(df["Rec_total_n_gpalma"], errors="coerce") / 1000.0
+        )
+
+    fuentes_principales_g = [
+        "Rec_urea_gpalma", "Rec_SPT_gpalma", "Rec_kcl_gpalma",
+        "Rec_kieserita_gpalma", "Rec_granubor_gpalma",
+    ]
+    fuentes_existentes_g = [c for c in fuentes_principales_g if c in df.columns]
+    if fuentes_existentes_g:
+        df["Rec_total_f_gpalma"] = (
+            df[fuentes_existentes_g].apply(pd.to_numeric, errors="coerce")
+            .sum(axis=1, min_count=1)
+        )
+        df["Rec_total_f_kgpalma"] = df["Rec_total_f_gpalma"] / 1000.0
+
+    if "Rec_caldol_kglote" in df.columns:
+        df["Rec_caldol_tonlote"] = (
+            pd.to_numeric(df["Rec_caldol_kglote"], errors="coerce") / 1000.0
+        )
 
     estado_cols = [c for c in df.columns if c.lower().startswith("estado_")]
 
-    id_cols_candidates = [lote_col, finca_col, departamento_col, edad_col, "material", "variedad", "manejo", area_col, n_palmas_col]
+    id_cols_candidates = [lote_col, finca_col, departamento_col, edad_col,
+                          "material", "variedad", "manejo", area_col, n_palmas_col]
     id_cols = [c for c in id_cols_candidates if c and c in df.columns]
-    prod_cols = [c for c in ["ton_ha_observada", "ton_ha_modelada", "rff_calculo", "fuente_rff", "especie", "flag_0g_1h", "flag_inferido"] if c in df.columns]
-    resultados_cols = id_cols + prod_cols + [c for c in df.columns if c.startswith("Rec_")] + estado_cols
+    prod_cols = [c for c in ["ton_ha_observada", "ton_ha_modelada", "rff_calculo",
+                             "fuente_rff", "especie", "flag_0g_1h", "flag_inferido"]
+                 if c in df.columns]
 
-    df_resultados = df[resultados_cols].copy()
+    rec_orden_existentes = [c for c in COLUMNAS_REC_ORDEN if c in df.columns]
 
+    final_cols = id_cols + prod_cols + rec_orden_existentes + estado_cols
+    final_cols = list(dict.fromkeys(final_cols))
+
+    df_resultados = df[final_cols].copy()
     df_resultados = _round_cols(df_resultados, decimals_default=2, decimals_gpalma=4)
 
-    eval_agro_cols = sorted([c for c in df_resultados.columns if c.startswith("Rec_da_") or c == "Rec_total_n_gpalma"])
+    eval_agro_cols = [c for c in COLUMNAS_REC_ORDEN
+                      if c.startswith("Rec_da_") or c == "Rec_total_n_kgpalma"]
+    eval_agro_cols = [c for c in eval_agro_cols if c in df_resultados.columns]
     eval_agro = df_resultados[id_cols + eval_agro_cols].copy()
 
-    eval_admin_cols = sorted([c for c in df_resultados.columns if (c.startswith("Rec_") and any(x in c for x in ["urea","spt","kcl","kieserita","granubor","caldol","cal"]) )] + ["Rec_total_f_gpalma"])
-
+    eval_admin_cols = [c for c in COLUMNAS_REC_ORDEN
+                       if c not in eval_agro_cols and c != "Formula (N-P-K-MgO-B)"]
     eval_admin_cols = [c for c in eval_admin_cols if c in df_resultados.columns]
-    eval_admin = df_resultados[id_cols + eval_admin_cols].copy() if eval_admin_cols else pd.DataFrame()
+    eval_admin = (df_resultados[id_cols + eval_admin_cols].copy()
+                  if eval_admin_cols else pd.DataFrame())
 
     agg_candidates = [finca_col, departamento_col, "material", "variedad", "manejo", lote_col]
     agg_by = next((c for c in agg_candidates if c and c in df.columns), None)
@@ -1444,7 +1559,7 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         agg_metrics_g = [c for c in df_resultados.columns if c.startswith("Rec_da_") and c.endswith("_gpalma")]
         agg_cols = agg_metrics + agg_metrics_g
         if agg_cols:
-            agrup = df_resultados.groupby(agg_by, dropna=False)[agg_cols].agg(['count','mean','sum','min','max'])
+            agrup = df_resultados.groupby(agg_by, dropna=False)[agg_cols].agg(['count', 'mean', 'sum', 'min', 'max'])
             agrup.columns = ['_'.join([str(i) for i in col]).strip() for col in agrup.columns.to_flat_index()]
             agrup = agrup.reset_index()
         else:
@@ -1456,7 +1571,7 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     if finca_col and finca_col in df_resultados.columns:
         resumen_metrics = [c for c in df_resultados.columns if c.startswith("Rec_da_") and c.endswith("_kgha")]
         if resumen_metrics:
-            resumen = df_resultados.groupby(finca_col, dropna=False)[resumen_metrics].agg(['count','sum','mean']).round(4)
+            resumen = df_resultados.groupby(finca_col, dropna=False)[resumen_metrics].agg(['count', 'sum', 'mean']).round(4)
             resumen.columns = ['_'.join([str(i) for i in col]).strip() for col in resumen.columns.to_flat_index()]
             resumen_finca = resumen.reset_index()
 
@@ -1475,16 +1590,20 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             agrup.to_excel(writer, index=False, sheet_name="Agrupaciones")
         if not resumen_finca.empty:
             resumen_finca.to_excel(writer, index=False, sheet_name="Resumen_Finca")
-
     buffer.seek(0)
 
     st.markdown('<div class="section-title">Vista previa — Resultados estandarizados</div>', unsafe_allow_html=True)
     st.dataframe(df_resultados.head(60), use_container_width=True)
 
-    st.download_button("📥 Descargar Excel estandarizado", data=buffer.getvalue(), file_name=nombre_excel_salida, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    st.download_button("📥 Descargar Excel estandarizado", data=buffer.getvalue(),
+                       file_name=nombre_excel_salida,
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       use_container_width=True)
 
     csv_bytes = df_resultados.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("📥 Descargar CSV Resultados", data=csv_bytes, file_name=f"fertilizacion_resultados_std_{now}.csv", mime="text/csv", use_container_width=True)
+    st.download_button("📥 Descargar CSV Resultados", data=csv_bytes,
+                       file_name=f"fertilizacion_resultados_std_{now}.csv",
+                       mime="text/csv", use_container_width=True)
 
     st.markdown("---")
 
@@ -1497,6 +1616,7 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         "excel_bytes": buffer.getvalue(),
         "csv_bytes": csv_bytes,
     }
+
 
 # ════════════════════════════════════════════════════
 # 7. SIDEBAR
@@ -1640,7 +1760,7 @@ def main():
             sel_edad = None
 
         st.markdown("---")
-        st.caption("Los filtros se aplican al dataset procesado (main).")
+        st.caption("Los filtros se aplican al dataset procesado.")
 
     df = data.copy()
     if sel_finca and finca_col:
@@ -1657,9 +1777,16 @@ def main():
         return
 
     seccion_kpis(df)
+
     st.markdown("---")
 
-    tabs = st.tabs(["🔍 Información", "📌 Resumen", "🧮 Agrupaciones", "💾 Exportar"])
+    tab_names = ["🔍 Información",
+                 "📌 Resumen",
+                 "🧮 Agrupaciones",
+                 "💾 Exportar",
+                 ]
+    tabs = st.tabs(tab_names)
+
     with tabs[0]:
         tab_info()
     with tabs[1]:
