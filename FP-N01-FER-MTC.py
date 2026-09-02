@@ -220,12 +220,6 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
         "kcl": ["fuente_kcl_kg_ha", "kcl_kg_ha", "kcl (kg/ha)"],
         "kieserita": ["fuente_kieserita_kg_ha", "kieserita_kg_ha", "kieserita (kg/ha)"],
         "granubor": ["fuente_granubor_kg_ha", "granubor_kg_ha", "granubor (kg/ha)"],
-        # Variantes adicionales para cal dolomita (incluye 'calamita' por si aparece)
-        "cal_dolomita": [
-            "fuente_cal_dolomita_kg_ha", "cal_dolomita_kg_ha", "cal_dolomita (kg/ha)",
-            "cal dolomita (kg/ha)", "cal dolomita", "cal_dolomita", "calamita", "calamita_kg_ha",
-            "cal-dolomita", "cal dolomita kg/ha"
-        ],
         "sulfato": ["fuente_sulfato_kg_ha", "sulfato_kg_ha", "sulfato (kg/ha)"],
     }
     for key, candidates in fuente_map_keys.items():
@@ -258,9 +252,41 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df[f"Rec_{key}_gpalma"] = np.nan
 
-    all_rec_gpalma = [c for c in df.columns if c.startswith("Rec_") and c.endswith("_gpalma")]
-    if all_rec_gpalma:
-        df["Rec_total_f_gpalma"] = pd.to_numeric(df[all_rec_gpalma].sum(axis=1, min_count=1), errors="coerce")
+    # Consistencia de nombres SPT
+    for old, new in [("Rec_spt_kgha", "Rec_SPT_kgha"),
+                     ("Rec_spt_kglote", "Rec_SPT_kglote"),
+                     ("Rec_spt_gpalma", "Rec_SPT_gpalma")]:
+        if old in df.columns and new not in df.columns:
+            df = df.rename(columns={old: new})
+
+    # ---- Cal dolomita: detección robusta con regex (variantes históricas) ----
+    caldol = _find_caldol_columns(df.columns)
+    if caldol["kgha"]:
+        df["Rec_caldol_kgha"] = pd.to_numeric(df[caldol["kgha"]], errors="coerce")
+    if caldol["kglote"]:
+        df["Rec_caldol_kglote"] = pd.to_numeric(df[caldol["kglote"]], errors="coerce")
+    elif "Rec_caldol_kgha" in df.columns and area_col in df.columns:
+        df["Rec_caldol_kglote"] = (df["Rec_caldol_kgha"] * area_s).replace([np.inf, -np.inf], np.nan)
+    if caldol["gpalma"]:
+        df["Rec_caldol_gpalma"] = pd.to_numeric(df[caldol["gpalma"]], errors="coerce")
+    elif "Rec_caldol_kglote" in df.columns and n_palmas_col in df.columns:
+        df["Rec_caldol_gpalma"] = _to_g_palma_from_kg_lote(df["Rec_caldol_kglote"], n_palmas_s)
+    if "Rec_caldol_kglote" in df.columns:
+        df["Rec_caldol_tonlote"] = (
+                pd.to_numeric(df["Rec_caldol_kglote"], errors="coerce") / 1000.0
+        ).replace([np.inf, -np.inf], np.nan)
+    df["flag_caldol_detectada"] = any(v is not None for v in caldol.values())
+
+    # ---- Total fuentes (excluye nutrientes Rec_da_* y excluye cal dolomita) ----
+    fuentes_g_existentes = [c for c in
+                            ["Rec_urea_gpalma", "Rec_SPT_gpalma", "Rec_kcl_gpalma",
+                             "Rec_kieserita_gpalma", "Rec_granubor_gpalma", "Rec_sulfato_gpalma"]
+                            if c in df.columns]
+    if fuentes_g_existentes:
+        df["Rec_total_f_gpalma"] = (
+            df[fuentes_g_existentes].apply(pd.to_numeric, errors="coerce")
+            .sum(axis=1, min_count=1)
+        )
 
     if "Formula_Kalini" in df.columns and "Formula (N-P-K-MgO-B)" not in df.columns:
         df["Formula (N-P-K-MgO-B)"] = df["Formula_Kalini"]
@@ -690,6 +716,16 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
         df.columns,
         ["n_palmas", "numero_palmas", "palmas", "plantas", "plantas_ha"],
     )
+
+    if n_palmas_col is None:
+        dens_col = find_col(df.columns, ["densidad", "palmas_ha", "density", "plantas_ha"])
+        area_col_tmp = find_col(df.columns, ["area", "ha", "hectareas", "superficie"])
+        if dens_col and area_col_tmp:
+            df["n_palmas_inferido"] = (
+                    df[area_col_tmp].apply(lambda x: to_float_safe(x, np.nan)) *
+                    df[dens_col].apply(lambda x: to_float_safe(x, np.nan))
+            ).round(0)
+            n_palmas_col = "n_palmas_inferido"
 
     rff_res = []
     fuente_res = []
@@ -1234,21 +1270,20 @@ def tab_resumen(df: pd.DataFrame):
 
     st.markdown("---")
 
-
 def tab_agrupaciones(df: pd.DataFrame):
     """
     Agrupaciones priorizando columnas 'Rec_*' generadas por tab_exportar_v2.
     UI:
     - elegir variable categórica (leniente)
-    - elegir tipo de variable numérica: kgha, kglote, gpalma, todas
-    - opción: incluir fuentes comerciales (Rec_* que no sean da_)
+    - elegir tipo de variable: Fuentes / Nutrientes / Ambos
+    - elegir tipo de unidad: kgha, kglote, gpalma, totales, todas
     - elegir variable numérica de la lista resultante
     - exportar CSV
     """
     st.markdown('<div class="section-title">Agrupaciones — Estadísticas por grupo</div>', unsafe_allow_html=True)
 
     cat_candidates = []
-    for c in ["finca", "departamento", "manejo", "material", "variedad", "lote"]:
+    for c in ["finca", "departamento", "manejo", "material", "variedad", "edad", "lote"]:
         col = find_col(df.columns, [c])
         if col:
             cat_candidates.append(col)
@@ -1256,12 +1291,41 @@ def tab_agrupaciones(df: pd.DataFrame):
         st.info("No se detectaron columnas categóricas (finca, departamento, manejo, material, variedad, lote).")
         return
 
-    unidad_opt = st.radio("Tipo de unidad a listar", options=["kgha", "kglote", "gpalma", "todas"], index=0, horizontal=True, key="agr_unidad_opt")
-    incluir_fuentes = st.checkbox("Incluir fuentes comerciales (Rec_* sin da_)", value=True, key="agr_incluir_fuentes")
+    # === NUEVO: radio tipo de variable (Fuentes / Nutrientes / Ambos) ===
+    tipo_var = st.radio(
+        "Tipo de variable a explorar",
+        options=["Fuentes", "Nutrientes", "Ambos"],
+        index=2,
+        horizontal=True,
+        key="agr_tipo_var",
+        help=(
+            "Fuentes: Urea, SPT, KCl, Kieserita, Granubor, Sulfato, Cal dolomita. "
+            "Nutrientes: N, P, K, Ca, Mg, B, S (demanda agronómica Rec_da_*). "
+            "Ambos: lista completa."
+        ),
+    )
 
-    rec_cols = [c for c in df.columns if c.startswith("Rec_")]
-    if not rec_cols:
-        rec_cols = [c for c in df.columns if c.lower().startswith("da_") or c.lower().startswith("nec_") or c.lower().startswith("total_")]
+    # === Unidad: insertar 'totales' entre gpalma y todas ===
+    unidad_opt = st.radio(
+        "Tipo de unidad a listar",
+        options=["kgha", "kglote", "gpalma", "totales", "todas"],
+        index=0,
+        horizontal=True,
+        key="agr_unidad_opt",
+        help="'totales' muestra únicamente las columnas agregadas (Rec_total_n_*, Rec_total_f_*).",
+    )
+
+    # === Patrones de clasificación de columnas Rec_* ===
+    PAT_FUENTES  = r"Rec_(urea|SPT|kcl|kieserita|granubor|sulfato|caldol)_"
+    PAT_NUTRI    = r"Rec_da_"
+    PAT_TOTAL_N  = r"Rec_total_n_"
+    PAT_TOTAL_F  = r"Rec_total_f_"
+
+    def _es_fuente(c):   return bool(re.match(PAT_FUENTES, c, re.I))
+    def _es_nutri(c):    return bool(re.match(PAT_NUTRI,   c, re.I))
+    def _es_total_n(c):  return bool(re.match(PAT_TOTAL_N, c, re.I))
+    def _es_total_f(c):  return bool(re.match(PAT_TOTAL_F, c, re.I))
+    def _es_total(c):    return _es_total_n(c) or _es_total_f(c)
 
     def _match_unidad(col, unidad):
         cl = col.lower()
@@ -1271,30 +1335,68 @@ def tab_agrupaciones(df: pd.DataFrame):
             return cl.endswith("_kglote") or "_kglote" in cl
         if unidad == "gpalma":
             return cl.endswith("_gpalma") or "_gpalma" in cl or "_g_palma" in cl
+        # 'totales' y 'todas' se manejan aparte
         return True
 
+    # === Pool de columnas Rec_* (con fallback legacy) ===
+    rec_cols = [c for c in df.columns if c.startswith("Rec_")]
+    if not rec_cols:
+        rec_cols = [
+            c for c in df.columns
+            if c.lower().startswith("da_") or c.lower().startswith("nec_") or c.lower().startswith("total_")
+        ]
+
+    # === Filtrado combinado tipo_var + unidad_opt ===
     candidate_num = []
     for c in rec_cols:
-        if unidad_opt == "todas" or _match_unidad(c, unidad_opt):
-            if not incluir_fuentes and re.match(r"Rec_((urea|spt|kcl|kieserita|granubor|cal|caldol).*)", c, re.I):
+        # 1) Filtro por tipo de variable (incluye totales del tipo elegido)
+        if tipo_var == "Fuentes" and not (_es_fuente(c) or _es_total_f(c)):
+            continue
+        if tipo_var == "Nutrientes" and not (_es_nutri(c) or _es_total_n(c)):
+            continue
+        # Ambos: pasa
+
+        # 2) Filtro por unidad
+        if unidad_opt == "totales":
+            # Mostrar solo totales, respetando el tipo_var
+            if tipo_var == "Fuentes" and not _es_total_f(c):
+                continue
+            if tipo_var == "Nutrientes" and not _es_total_n(c):
+                continue
+            if tipo_var == "Ambos" and not _es_total(c):
                 continue
             candidate_num.append(c)
+            continue
 
+        # Para kgha/kglote/gpalma/todas: excluir columnas totales (son agregadas, no tienen esas unidades)
+        if _es_total(c):
+            continue
+
+        if unidad_opt != "todas" and not _match_unidad(c, unidad_opt):
+            continue
+        candidate_num.append(c)
+
+    # === Fallback si no hay Rec_* o la combinación quedó vacía ===
     if not candidate_num:
         for c in df.columns:
             cl = c.lower()
             if unidad_opt == "kgha" and (cl.endswith("_kgha") or cl.endswith("_kg_ha")):
                 candidate_num.append(c)
-            if unidad_opt == "kglote" and (cl.endswith("_kglote") or cl.endswith("_kg_lote")):
+            elif unidad_opt == "kglote" and (cl.endswith("_kglote") or cl.endswith("_kg_lote")):
                 candidate_num.append(c)
-            if unidad_opt == "gpalma" and ("gpalma" in cl or "_g_palma" in cl):
+            elif unidad_opt == "gpalma" and ("gpalma" in cl or "_g_palma" in cl):
                 candidate_num.append(c)
-        candidate_num = list(dict.fromkeys(candidate_num))  # unique preserve order
+            elif unidad_opt == "totales" and ("total_n" in cl or "total_f" in cl):
+                candidate_num.append(c)
+            elif unidad_opt == "todas":
+                candidate_num.append(c)
+        candidate_num = list(dict.fromkeys(candidate_num))  # unique preservando orden
 
     if not candidate_num:
         st.info("No se encontraron columnas numéricas tras aplicar filtros. Elige 'todas' o revisa el dataset.")
         return
 
+    # === Configuración final ===
     with st.expander("Configuración de agrupación", expanded=True):
         agrup_col = st.selectbox("Selecciona variable categórica para agrupar:", options=cat_candidates, index=0, key="agr_col")
         var_num = st.selectbox("Selecciona variable numérica:", options=candidate_num, index=0, key="agr_var")
@@ -1311,10 +1413,10 @@ def tab_agrupaciones(df: pd.DataFrame):
         return
 
     decimals = 4 if ("gpalma" in var_num.lower() or "_g_palma" in var_num.lower()) else 2
-    agg['sum'] = agg['sum'].round(decimals)
+    agg['sum']  = agg['sum'].round(decimals)
     agg['mean'] = agg['mean'].round(decimals)
-    agg['min'] = agg['min'].round(decimals)
-    agg['max'] = agg['max'].round(decimals)
+    agg['min']  = agg['min'].round(decimals)
+    agg['max']  = agg['max'].round(decimals)
     agg = agg.reset_index()
 
     order_col = 'sum' if agg['sum'].notna().sum() > 0 and agg['sum'].abs().sum() > 0 else 'count'
@@ -1322,7 +1424,7 @@ def tab_agrupaciones(df: pd.DataFrame):
 
     view = agg.head(top_n) if top_n > 0 else agg
 
-    st.markdown("#### Resultado (tabla única)")
+    st.markdown("#### Resultado")
     st.dataframe(view, use_container_width=True)
 
     csv_bytes = agg.to_csv(index=False).encode("utf-8-sig")
@@ -1334,12 +1436,48 @@ def tab_agrupaciones(df: pd.DataFrame):
     st.markdown("---")
 
 def _to_g_palma_from_kg_lote(kg_lote_series, n_palmas_series):
-    """Convierte kg/lote -> g/palma de forma robusta (maneja NaN, ceros, inf)."""
-    s = kg_lote_series.copy().astype(float)
-    n = n_palmas_series.copy().astype(float)
-    n = n.replace([0, np.inf, -np.inf], np.nan)
-    g = (s * 1000.0) / n
+    s = pd.to_numeric(kg_lote_series, errors="coerce").astype(float).replace([np.inf, -np.inf], np.nan)
+    n = pd.to_numeric(n_palmas_series, errors="coerce").astype(float).replace([0, np.inf, -np.inf], np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        g = (s * 1000.0) / n
+    g = g.replace([np.inf, -np.inf], np.nan)
     return g
+
+def _find_caldol_columns(df_cols):
+    """
+    Detecta columnas de cal dolomita usando regex lenient (variantes históricas).
+    Retorna dict: {'kgha': col|None, 'kglote': col|None, 'gpalma': col|None,
+                   'tonlote': col|None, 'kgpalma': col|None}
+    """
+    result = {"kgha": None, "kglote": None, "gpalma": None, "tonlote": None, "kgpalma": None}
+
+    def is_caldol(name):
+        n = str(name).lower()
+        if re.search(r"caldol", n): return True
+        if re.search(r"cal[\s_\-]*dol", n): return True
+        if re.search(r"dolom", n): return True
+        if re.search(r"calam", n): return True
+        return False
+
+    def detect_unit(name):
+        n = str(name).lower()
+        if re.search(r"ton", n) and re.search(r"lote", n): return "tonlote"
+        if re.search(r"kg", n) and re.search(r"lote", n): return "kglote"
+        if re.search(r"kgpalma|kg_palma", n) or (re.search(r"kg", n) and re.search(r"palma", n)):
+            return "kgpalma"
+        if (re.search(r"g\b", n) or "gpalma" in n or "g_palma" in n or "/palma" in n or "_palma" in n) \
+           and "lote" not in n and "kg" not in n:
+            return "gpalma"
+        if re.search(r"ha\b|/ha|kgha", n): return "kgha"
+        return "kgha"
+
+    for c in df_cols:
+        if not is_caldol(c):
+            continue
+        unit = detect_unit(c)
+        if result[unit] is None:
+            result[unit] = c
+    return result
 
 def _to_kg_palma_from_g_palma(g_palma_series):
     """Convierte g/palma -> kg/palma."""
@@ -1399,21 +1537,21 @@ COLUMNAS_REC_ORDEN = [
     "Rec_total_n_kgpalma",
     # Fuentes comerciales — kg/ha
     "Rec_urea_kgha", "Rec_SPT_kgha", "Rec_kcl_kgha", "Rec_kieserita_kgha",
-    "Rec_granubor_kgha",
+    "Rec_granubor_kgha", "Rec_sulfato_kgha",
     # Fuentes comerciales — kg/lote
     "Rec_urea_kglote", "Rec_SPT_kglote", "Rec_kcl_kglote", "Rec_kieserita_kglote",
-    "Rec_granubor_kglote",
+    "Rec_granubor_kglote", "Rec_sulfato_kglote",
     # Fuentes comerciales — g/palma
     "Rec_urea_gpalma", "Rec_SPT_gpalma", "Rec_kcl_gpalma", "Rec_kieserita_gpalma",
-    "Rec_granubor_gpalma",
+    "Rec_granubor_gpalma", "Rec_sulfato_gpalma",
     # Total fuentes — kg/palma
     "Rec_total_f_kgpalma",
     # Fórmula compuesta
     "Formula (N-P-K-MgO-B)",
     # Cal dolomita (enmienda, fuera del compuesto)
-    "Rec_caldol_kgha", "Rec_caldol_gpalma", "Rec_caldol_kglote", "Rec_caldol_tonlote",
+    "Rec_caldol_kgha", "Rec_caldol_kglote", "Rec_caldol_gpalma",
+    "Rec_caldol_kgpalma", "Rec_caldol_tonlote",
 ]
-
 
 def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     """
@@ -1463,7 +1601,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         "kcl": ["fuente_kcl_kg_ha", "kcl (kg/ha)"],
         "kieserita": ["fuente_kieserita_kg_ha", "kieserita (kg/ha)"],
         "granubor": ["fuente_granubor_kg_ha", "granubor (kg/ha)"],
-        "cal_dolomita": ["fuente_cal_dolomita_kg_ha", "cal dolomita (kg/ha)", "cal_dolomita (kg/ha)"],
         "sulfato": ["fuente_sulfato_kg_ha", "sulfato (kg/ha)", "sulfato_ (kg/ha)"],
     }
     for key, cands in fuente_map.items():
@@ -1476,11 +1613,26 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             continue
         df[f"Rec_{key}_kgha"] = df[found].apply(lambda x: to_float_safe(x, np.nan))
 
-        cand_lote = find_col(df.columns, [found.replace(" (kg/ha)", "_lote (kg)"), found.replace("_kg_ha", "_kg_lote")])
-        if cand_lote:
-            df[f"Rec_{key}_kglote"] = df[cand_lote].apply(lambda x: to_float_safe(x, np.nan))
+        # --- kglote: priorizar columna canónica del motor, luego kgha*area ---
+        # FIX: nunca usar `found` como cand_lote. Si found no contiene "(kg/ha)",
+        # el .replace() no cambia la cadena y find_col devolvería la propia
+        # columna kgha (bug: kglote = kgha, sin multiplicar por área).
+        cand_lote_motor = find_col(df.columns, [f"fuente_{key}_kg_lote"])
+        cand_lote_alt = None
+        for _cand in [found.replace(" (kg/ha)", "_lote (kg)"),
+                      found.replace("_kg_ha", "_kg_lote")]:
+            if _cand != found:  # sólo si el replace realmente cambió el nombre
+                _col = find_col(df.columns, [_cand])
+                if _col and _col != found:
+                    cand_lote_alt = _col
+                    break
+
+        if cand_lote_motor:
+            df[f"Rec_{key}_kglote"] = df[cand_lote_motor].apply(lambda x: to_float_safe(x, np.nan))
         elif area_col in df.columns:
             df[f"Rec_{key}_kglote"] = (df[f"Rec_{key}_kgha"] * area_s).replace([np.inf, -np.inf], np.nan)
+        elif cand_lote_alt:
+            df[f"Rec_{key}_kglote"] = df[cand_lote_alt].apply(lambda x: to_float_safe(x, np.nan))
         else:
             cand_lote_any = find_col(df.columns, [f"{key}_lote (kg)", f"{key}_lote"])
             if cand_lote_any:
@@ -1489,15 +1641,32 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         if f"Rec_{key}_kglote" in df.columns and n_palmas_col in df.columns:
             df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_{key}_kglote"], n_palmas_s)
 
-    spt_variants = [c for c in df.columns if re.match(r"rec[_\-]*spt[_\-]*", c, re.I)]
-    for c in spt_variants:
-        df = df.rename(columns={c: c.upper().replace("REC_", "Rec_").replace("-", "_")})
-    if "Rec_spt_kgha" in df.columns:
-        df = df.rename(columns={"Rec_spt_kgha": "Rec_SPT_kgha"})
-    if "Rec_spt_kglote" in df.columns:
-        df = df.rename(columns={"Rec_spt_kglote": "Rec_SPT_kglote"})
-    if "Rec_spt_gpalma" in df.columns:
-        df = df.rename(columns={"Rec_spt_gpalma": "Rec_SPT_gpalma"})
+        for old, new in [("Rec_spt_kgha", "Rec_SPT_kgha"),
+                         ("Rec_spt_kglote", "Rec_SPT_kglote"),
+                         ("Rec_spt_gpalma", "Rec_SPT_gpalma")]:
+            if old in df.columns and new not in df.columns:
+                df = df.rename(columns={old: new})
+
+    caldol = _find_caldol_columns(df.columns)
+    if caldol["kgha"]:
+        df["Rec_caldol_kgha"] = df[caldol["kgha"]].apply(lambda x: to_float_safe(x, np.nan))
+    if caldol["kglote"]:
+        df["Rec_caldol_kglote"] = df[caldol["kglote"]].apply(lambda x: to_float_safe(x, np.nan))
+    elif "Rec_caldol_kgha" in df.columns and area_col in df.columns:
+        df["Rec_caldol_kglote"] = (df["Rec_caldol_kgha"] * area_s).replace([np.inf, -np.inf], np.nan)
+    if caldol["gpalma"]:
+        df["Rec_caldol_gpalma"] = df[caldol["gpalma"]].apply(lambda x: to_float_safe(x, np.nan))
+    elif "Rec_caldol_kglote" in df.columns and n_palmas_col in df.columns:
+        df["Rec_caldol_gpalma"] = _to_g_palma_from_kg_lote(df["Rec_caldol_kglote"], n_palmas_s)
+    if "Rec_caldol_kglote" in df.columns:
+        df["Rec_caldol_tonlote"] = (
+                pd.to_numeric(df["Rec_caldol_kglote"], errors="coerce") / 1000.0
+        ).replace([np.inf, -np.inf], np.nan)
+    if "Rec_caldol_gpalma" in df.columns:
+        df["Rec_caldol_kgpalma"] = (
+                pd.to_numeric(df["Rec_caldol_gpalma"], errors="coerce") / 1000.0
+        )
+    df["flag_caldol_detectada"] = any(v is not None for v in caldol.values())
 
     if "Formula_Kalini" in df.columns and "Formula (N-P-K-MgO-B)" not in df.columns:
         df["Formula (N-P-K-MgO-B)"] = df["Formula_Kalini"]
@@ -1507,10 +1676,9 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             pd.to_numeric(df["Rec_total_n_gpalma"], errors="coerce") / 1000.0
         )
 
-    fuentes_principales_g = [
-        "Rec_urea_gpalma", "Rec_SPT_gpalma", "Rec_kcl_gpalma",
-        "Rec_kieserita_gpalma", "Rec_granubor_gpalma",
-    ]
+    fuentes_principales_g = ["Rec_urea_gpalma", "Rec_SPT_gpalma", "Rec_kcl_gpalma",
+                             "Rec_kieserita_gpalma", "Rec_granubor_gpalma", "Rec_sulfato_gpalma"]
+
     fuentes_existentes_g = [c for c in fuentes_principales_g if c in df.columns]
     if fuentes_existentes_g:
         df["Rec_total_f_gpalma"] = (
@@ -1518,11 +1686,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             .sum(axis=1, min_count=1)
         )
         df["Rec_total_f_kgpalma"] = df["Rec_total_f_gpalma"] / 1000.0
-
-    if "Rec_caldol_kglote" in df.columns:
-        df["Rec_caldol_tonlote"] = (
-            pd.to_numeric(df["Rec_caldol_kglote"], errors="coerce") / 1000.0
-        )
 
     estado_cols = [c for c in df.columns if c.lower().startswith("estado_")]
 
