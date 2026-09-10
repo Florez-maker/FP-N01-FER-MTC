@@ -174,7 +174,7 @@ NIVELES_INMADURO_CARGADOS = False
 
 PRIORIDAD_IMPUTACION_FOLIAR = [
     ("edad_departamento", ["_imp_edad", "_imp_departamento"]),
-    ("edad_material",     ["_imp_edad", "_imp_material"]),   # G = Guineensis / H = Híbrido OxG
+    ("edad_material",     ["_imp_edad", "_imp_material"]),
     ("edad_finca",        ["_imp_edad", "_imp_finca"]),
     ("edad",              ["_imp_edad"]),
 ]
@@ -203,7 +203,6 @@ def normalize_col(col: str) -> str:
     col = re.sub(r"_+", "_", col).strip("_")
     return col
 
-
 def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
@@ -220,12 +219,17 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
         dens_s = pd.Series(DENSIDAD_TEORICA_HA, index=df.index)
 
     for e in ["N", "P", "K", "Ca", "Mg", "B", "S"]:
-        cand_ha = find_col(df.columns, [f"da_{e.lower()}_kg_ha", f"nec_{e.lower()}_kg_ha",
-                                        f"da_{e} (kg/ha)", f"nec_{e} (kg/ha)"])
-        cand_lote = find_col(df.columns, [f"da_{e.lower()}_kg_lote", f"nec_{e.lower()}_kg_lote",
-                                          f"da_{e}_lote", f"{e.lower()}_lote"])
-        cand_gpalma = find_col(df.columns, [f"da_{e.lower()}_g_palma", f"{e.lower()}_g_palma",
-                                            f"da_{e}/palma (g)"])
+        if e == "S":
+            cand_ha = find_col(df.columns, [f"nec_{e.lower()}_kg_ha", f"da_{e.lower()}_kg_ha",
+                                            f"nec_{e} (kg/ha)", f"da_{e} (kg/ha)"])
+            cand_lote = find_col(df.columns, [f"nec_{e.lower()}_kg_lote", f"da_{e.lower()}_kg_lote",
+                                              f"{e.lower()}_lote", f"da_{e}_lote"])
+            cand_gpalma = find_col(df.columns, [f"nec_{e.lower()}_g_palma", f"da_{e.lower()}_g_palma",
+                                                f"{e.lower()}_g_palma", f"da_{e}/palma (g)"])
+        else:
+            cand_ha = find_col(df.columns, [f"da_{e.lower()}_kg_ha", f"da_{e} (kg/ha)", f"da_{e.lower()} (kg/ha)"])
+            cand_lote = find_col(df.columns, [f"da_{e.lower()}_kg_lote", f"da_{e}_lote (kg)", f"da_{e}_lote"])
+            cand_gpalma = find_col(df.columns, [f"da_{e.lower()}_g_palma", f"da_{e}/palma (g)"])
 
         if cand_ha and cand_ha in df.columns:
             df[f"Rec_da_{e}_kgha"] = pd.to_numeric(df[cand_ha], errors="coerce")
@@ -277,12 +281,9 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         df[f"Rec_{key}_kgha"] = pd.to_numeric(df[found], errors="coerce")
-
-        # g/palma y kg/palma: densidad TEÓRICA 143
         df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kgha(df[f"Rec_{key}_kgha"])
         df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"])
 
-        # kg/lote: prioridad columna del motor (densidad real); si no, kg_lote_desde_kgha
         cand_lote_motor = find_col(df.columns, [f"fuente_{key}_kg_lote"])
         if cand_lote_motor:
             df[f"Rec_{key}_kglote"] = pd.to_numeric(df[cand_lote_motor], errors="coerce")
@@ -393,7 +394,7 @@ def calcular_densidad_real(df, area_col, n_palmas_col):
         npal = df[n_palmas_col].apply(lambda x: to_float_safe(x, np.nan))
         with np.errstate(divide="ignore", invalid="ignore"):
             dens = (npal / area).replace([np.inf, -np.inf], np.nan)
-        dens = dens.where((dens >= 50) & (dens <= 300))  # saneo: fuera de rango → 143
+        dens = dens.where((dens >= 50) & (dens <= 300))
     else:
         dens = pd.Series(np.nan, index=df.index)
     return dens.fillna(DENSIDAD_TEORICA_HA).round(2)
@@ -837,7 +838,12 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identifica
 
 
 def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
-
+    """
+    Descompone cada nutriente en su fuente comercial usando la
+    RECOMENDACIÓN FINAL (nec_*), que ya incluye la eficiencia de
+    fertilización (para S: nec_S = da_S / 0.40). Si nec_* no existe
+    para un elemento, cae a da_* como respaldo (compatibilidad).
+    """
     df = df.copy()
     ha_cols, lote_cols, gpalma_cols = [], [], []
     aporte_secundario_acum = {}
@@ -849,23 +855,26 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
             continue
         fuente_nombre = meta["fuente"]
         apor = to_float_safe(meta["aporte"], default=np.nan)
+
+        # ── FIX QA: base = recomendación final (post-eficiencia), no la demanda ajustada ──
+        rec_ha_col = f"nec_{elem.lower()}_kg_ha"
         da_ha_col = f"da_{elem.lower()}_kg_ha"
-        if da_ha_col not in df.columns or pd.isna(apor) or apor <= 0:
+        base_col = rec_ha_col if rec_ha_col in df.columns else da_ha_col
+        if base_col not in df.columns or pd.isna(apor) or apor <= 0:
             continue
 
         nombre_key = fuente_nombre.lower()
 
-        # Límite inferior 0: la Kieserita ya aporta S y nunca deja demanda negativa
         if elem in aporte_secundario_acum:
-            da_efectivo = (df[da_ha_col] - aporte_secundario_acum[elem]).clip(lower=0)
+            base_efectivo = (df[base_col] - aporte_secundario_acum[elem]).clip(lower=0)
         else:
-            da_efectivo = df[da_ha_col]
+            base_efectivo = df[base_col]
 
         ha_c = f"fuente_{nombre_key}_kg_ha"
         lo_c = f"fuente_{nombre_key}_kg_lote"
         gp_c = f"fuente_{nombre_key}_g_palma"
 
-        df[ha_c] = (da_efectivo / apor).round(6)
+        df[ha_c] = (base_efectivo / apor).round(6)
         df[lo_c] = kg_lote_desde_kgha(df[ha_c], area_serie, densidad_serie).round(6)
         df[gp_c] = kg_a_g_palma(df[ha_c]).round(6)
 
@@ -900,14 +909,21 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
         df["total_compuesto_kg_ha"] = np.nan
         df["total_compuesto_kg_lote"] = np.nan
 
+    def _valor_nutriente(r, e):
+        """Recomendación final (nec_*) si existe; si no, demanda ajustada (da_*)."""
+        c_nec = f"nec_{e.lower()}_kg_ha"
+        c_da = f"da_{e.lower()}_kg_ha"
+        if c_nec in r.index and not pd.isna(r.get(c_nec, np.nan)):
+            return r[c_nec]
+        return r.get(c_da, np.nan)
+
     def formula_row(r):
-        idx = {e: f"da_{e.lower()}_kg_ha" for e in ("N", "P", "K", "Mg", "S", "B")}
         tot_c = r.get("total_compuesto_kg_ha", np.nan)
         if pd.isna(tot_c) or tot_c <= 0:
             return np.nan
 
         def pct(e, dec=0):
-            v = r.get(idx[e], np.nan)
+            v = _valor_nutriente(r, e)
             if pd.isna(v):
                 return 0
             return round(v / tot_c * 100, dec)
@@ -917,6 +933,7 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
 
     df["Formula_Kalini"] = df.apply(formula_row, axis=1)
     return df
+
 
 def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
 
@@ -975,6 +992,10 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
         edad_serie = df[edad_col].apply(lambda x: to_float_safe(x, np.nan))
     else:
         edad_serie = pd.Series(np.nan, index=df.index)
+
+    # ── QA: lotes sin edad se conservan, solo se marcan (no se eliminan) ──
+    df["flag_edad_faltante"] = edad_serie.isna().astype(int)
+
     df["flag_inmaduro"] = edad_serie.notna() & (edad_serie <= EDAD_INMADURA_MAX)
     df.loc[df["flag_inmaduro"], "rff_calculo"] = 0.0
     df.loc[df["flag_inmaduro"], "fuente_rff"] = "inmaduro_sin_exportacion"
@@ -1050,6 +1071,10 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["total_g_palma"] = np.nan
         df["total_kg_palma"] = np.nan
+
+    # ── Trazabilidad QA: DA de S antes de aplicar la eficiencia (0.40) ──
+    if "da_s_kg_ha" in df.columns:
+        df["da_S_preEficiencia_kg_ha"] = df["da_s_kg_ha"]
 
     df = descomponer_fuentes_kalini(df, area_serie, densidad_serie)
     df = normalize_for_ui(df)
@@ -1316,8 +1341,10 @@ def tab_info():
 def tab_resumen(df: pd.DataFrame):
     st.markdown('<div class="section-title">Resumen de resultados</div>', unsafe_allow_html=True)
 
-    n_inferidos = 0
     n_total = len(df)
+
+    # ── Avisos de integridad ──
+    n_inferidos = 0
     pct = 0.0
     if "flag_inferido" in df.columns:
         try:
@@ -1336,6 +1363,15 @@ def tab_resumen(df: pd.DataFrame):
                 f"respaldo). Revisa la columna `fuente_rff` en el export."
             )
 
+    if "flag_edad_faltante" in df.columns:
+        n_sin_edad = int(pd.to_numeric(df["flag_edad_faltante"], errors="coerce").fillna(0).sum())
+        if n_sin_edad > 0:
+            st.warning(
+                f"⚠️ **{n_sin_edad} lotes** no tienen dato de edad. Se conservaron en el "
+                f"dataset (no se eliminaron) usando RFF de respaldo. Revisa `flag_edad_faltante`."
+            )
+
+    # ── Tabla nutricional ──
     elementos = []
     for cand in ELEMENTOS_CALCULO:
         fol_cand = find_col(df.columns, [f"fol_pct_{cand.lower()}", f"fol_pct_{cand.upper()}", f"fol_pct_{cand}"])
@@ -1421,25 +1457,135 @@ def tab_resumen(df: pd.DataFrame):
         )
         st.plotly_chart(fig_h, use_container_width=True, key="resumen_heatmap")
 
-        formula_col = find_col(df.columns, ["Formula_Kalini", "Formula (N-P-K-MgO-B)", "formula_kalini", "formula"])
+        formula_col = find_col(df.columns, ["Formula_Kalini", "Formula (N-P-K-MgO-B)",
+                                            "Formula (N-P-K-MgO-S-B)", "formula_kalini", "formula"])
+
         if formula_col and formula_col in df.columns:
+            # ── Fórmulas globales más frecuentes ──
             st.markdown(
                 '<div class="section-title">Fórmulas compuestas más frecuentes</div>',
                 unsafe_allow_html=True
             )
             top_formulas = df[formula_col].dropna().value_counts().head(8).reset_index()
-            top_formulas.columns = ["Fórmula (N-P-K-MgO-B)", "Lotes"]
+            top_formulas.columns = ["Fórmula", "Lotes"]
             if len(top_formulas) > 0:
                 cols = st.columns(min(len(top_formulas), 6))
                 for col, (_, r) in zip(cols, top_formulas.iterrows()):
                     col.markdown(
-                        f'<div class="formula-badge">{r["Fórmula (N-P-K-MgO-B)"]}</div>'
+                        f'<div class="formula-badge">{r["Fórmula"]}</div>'
                         f'<div style="font-size:0.75rem;color:#7A8899;margin-left:0.3rem;">'
                         f'{int(r["Lotes"])} lotes</div>',
                         unsafe_allow_html=True
                     )
             else:
                 st.info("No hay fórmulas compuestas para mostrar.")
+
+            # ══════════════════════════════════════════════════════════
+            # Fórmulas compuestas POR EDAD (solicitud Kalini)
+            # ══════════════════════════════════════════════════════════
+            edad_col_f = find_col(df.columns, ["edad", "age", "anos", "ano_planta", "idade"])
+            if edad_col_f:
+                st.markdown(
+                    '<div class="section-title">Fórmulas compuestas por edad</div>',
+                    unsafe_allow_html=True
+                )
+                st.caption(
+                    "Variabilidad de fórmulas por edad, para apoyar la reducción y "
+                    "compatibilización de formulaciones."
+                )
+
+                modo_edad = st.radio(
+                    "Agrupar la edad por:",
+                    options=["Franja etaria", "Edad exacta"],
+                    horizontal=True,
+                    key="res_form_edad_modo",
+                )
+
+                base = df[[edad_col_f, formula_col]].copy()
+                base["_formula"] = base[formula_col].astype(str).replace({"nan": np.nan, "None": np.nan})
+                base = base.dropna(subset=["_formula"])
+
+                if base.empty:
+                    st.info("No hay fórmulas compuestas calculadas para agrupar por edad.")
+                else:
+                    if modo_edad == "Franja etaria":
+                        col_edad = "Franja de edad"
+
+                        def _franja(x):
+                            v = to_float_safe(x, np.nan)
+                            if pd.isna(v):
+                                return "Sin edad"
+                            if v <= 3:
+                                return "0–3 (inmaduro)"
+                            if v <= 8:
+                                return "4–8"
+                            if v <= 13:
+                                return "9–13"
+                            return "14+"
+
+                        base[col_edad] = base[edad_col_f].apply(_franja)
+                        orden_cat = pd.CategoricalDtype(
+                            ["0–3 (inmaduro)", "4–8", "9–13", "14+", "Sin edad"], ordered=True
+                        )
+                        base[col_edad] = base[col_edad].astype(orden_cat)
+                    else:
+                        col_edad = "Edad (años)"
+                        base[col_edad] = base[edad_col_f].apply(lambda x: to_float_safe(x, np.nan)).round(0)
+
+                    # Tabla: conteo de lotes por (edad, fórmula) + % dentro del grupo de edad
+                    tab_formula_edad = (
+                        base.groupby([col_edad, "_formula"], observed=True)
+                        .size()
+                        .reset_index(name="Lotes")
+                    )
+                    tab_formula_edad["% del grupo"] = (
+                        tab_formula_edad.groupby(col_edad, observed=True)["Lotes"]
+                        .transform(lambda s: (s / s.sum() * 100).round(1))
+                    )
+                    tab_formula_edad = tab_formula_edad.sort_values(
+                        [col_edad, "Lotes"], ascending=[True, False]
+                    )
+                    tab_formula_edad = tab_formula_edad.rename(columns={"_formula": "Fórmula"})
+
+                    # Nº de fórmulas distintas por edad (para ver dónde compatibilizar)
+                    n_formulas_por_edad = (
+                        tab_formula_edad.groupby(col_edad, observed=True)["Fórmula"]
+                        .nunique()
+                        .reset_index(name="N° fórmulas distintas")
+                    )
+
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        st.markdown("##### Detalle por edad")
+                        st.dataframe(tab_formula_edad, use_container_width=True, hide_index=True)
+                    with c2:
+                        st.markdown("##### Variabilidad por edad")
+                        st.dataframe(n_formulas_por_edad, use_container_width=True, hide_index=True)
+
+                    # Fórmula modal (más frecuente) por grupo de edad
+                    modal = (
+                        tab_formula_edad.sort_values("Lotes", ascending=False)
+                        .drop_duplicates(subset=[col_edad])
+                        .sort_values(col_edad)
+                    )
+                    st.caption("Fórmula predominante por grupo de edad:")
+                    mcols = st.columns(min(len(modal), 5)) if len(modal) > 0 else []
+                    for col, (_, r) in zip(mcols, modal.iterrows()):
+                        col.markdown(
+                            f'<div class="formula-badge">{r[col_edad]}: {r["Fórmula"]}</div>'
+                            f'<div style="font-size:0.75rem;color:#7A8899;margin-left:0.3rem;">'
+                            f'{int(r["Lotes"])} lotes ({r["% del grupo"]}%)</div>',
+                            unsafe_allow_html=True
+                        )
+
+                    csv_edad = tab_formula_edad.to_csv(index=False).encode("utf-8-sig")
+                    st.download_button(
+                        "📥 Descargar fórmulas por edad (CSV)",
+                        data=csv_edad,
+                        file_name="formulas_por_edad.csv",
+                        mime="text/csv",
+                        key="dl_formulas_edad",
+                    )
 
     if n_inferidos > 0:
         st.warning(
@@ -1798,9 +1944,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
     df = df.copy()
 
-    # ──────────────────────────────────────────────────────────────
-    # 1. Columnas identificadoras y series base
-    # ──────────────────────────────────────────────────────────────
     lote_col = _safe_find(df, ["lote", "block", "cod_lote", "id_lote"])
     finca_col = _safe_find(df, ["finca", "farm", "hacienda"])
     departamento_col = _safe_find(df, ["departamento", "depto", "region", "zona"])
@@ -1808,7 +1951,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     area_col = _safe_find(df, ["area", "ha", "hectareas", "superficie"])
     n_palmas_col = _safe_find(df, ["n_palmas", "numero_palmas", "palmas", "plantas", "plantas_ha"])
 
-    # Densidad REAL del lote (para kg/lote); fallback 143
     if "densidad_real" in df.columns:
         dens_s = pd.to_numeric(df["densidad_real"], errors="coerce").fillna(DENSIDAD_TEORICA_HA)
     else:
@@ -1817,33 +1959,32 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     area_s = df[area_col].apply(lambda x: to_float_safe(x, np.nan)) if area_col in df.columns else pd.Series(np.nan, index=df.index)
     n_palmas_s = df[n_palmas_col].apply(lambda x: to_float_safe(x, np.nan)) if n_palmas_col in df.columns else pd.Series(np.nan, index=df.index)
 
-    # ──────────────────────────────────────────────────────────────
-    # 2. Nutrientes (da_*) → Rec_*
-    #    kg/ha → base | g/palma y kg/palma → densidad TEÓRICA 143
-    #    kg/lote → densidad REAL
-    # ──────────────────────────────────────────────────────────────
     for e in ["N", "P", "K", "Ca", "Mg", "B", "S"]:
-        cand_ha = find_col(df.columns, [f"da_{e.lower()}_kg_ha", f"da_{e} (kg/ha)", f"da_{e.lower()} (kg/ha)"])
-        cand_lote = find_col(df.columns, [f"da_{e.lower()}_kg_lote", f"da_{e}_lote (kg)", f"da_{e}_lote"])
-        cand_gpalma = find_col(df.columns, [f"da_{e.lower()}_g_palma", f"da_{e}/palma (g)"])
+        if e == "S":
+            cand_ha = find_col(df.columns, [f"nec_{e.lower()}_kg_ha", f"da_{e.lower()}_kg_ha",
+                                            f"nec_{e} (kg/ha)", f"da_{e} (kg/ha)"])
+            cand_lote = find_col(df.columns, [f"nec_{e.lower()}_kg_lote", f"da_{e.lower()}_kg_lote",
+                                              f"{e.lower()}_lote", f"da_{e}_lote"])
+            cand_gpalma = find_col(df.columns, [f"nec_{e.lower()}_g_palma", f"da_{e.lower()}_g_palma",
+                                                f"{e.lower()}_g_palma", f"da_{e}/palma (g)"])
+        else:
+            cand_ha = find_col(df.columns, [f"da_{e.lower()}_kg_ha", f"da_{e} (kg/ha)", f"da_{e.lower()} (kg/ha)"])
+            cand_lote = find_col(df.columns, [f"da_{e.lower()}_kg_lote", f"da_{e}_lote (kg)", f"da_{e}_lote"])
+            cand_gpalma = find_col(df.columns, [f"da_{e.lower()}_g_palma", f"da_{e}/palma (g)"])
 
         if cand_ha:
             df[f"Rec_da_{e}_kgha"] = df[cand_ha].apply(lambda x: to_float_safe(x, np.nan))
 
-        # kg/lote: prioridad columna del motor (ya sale con densidad real);
-        # si no existe, se calcula desde kg/ha con densidad real
         if cand_lote:
             df[f"Rec_da_{e}_kglote"] = df[cand_lote].apply(lambda x: to_float_safe(x, np.nan))
         elif cand_ha and area_col in df.columns:
             df[f"Rec_da_{e}_kglote"] = kg_lote_desde_kgha(df[f"Rec_da_{e}_kgha"], area_s, dens_s)
 
-        # g/palma y kg/palma: SIEMPRE densidad teórica 143 (unidad base)
         if cand_gpalma:
             df[f"Rec_da_{e}_gpalma"] = df[cand_gpalma].apply(lambda x: to_float_safe(x, np.nan))
         elif cand_ha:
             df[f"Rec_da_{e}_gpalma"] = kg_a_g_palma(df[f"Rec_da_{e}_kgha"])
         elif f"Rec_da_{e}_kglote" in df.columns and n_palmas_col in df.columns:
-            # fallback legado: desde kg/lote y palmas reales
             df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_da_{e}_kglote"], n_palmas_s)
 
         if f"Rec_da_{e}_kgha" in df.columns:
@@ -1851,15 +1992,11 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         elif f"Rec_da_{e}_gpalma" in df.columns:
             df[f"Rec_da_{e}_kgpalma"] = pd.to_numeric(df[f"Rec_da_{e}_gpalma"], errors="coerce") / 1000.0
 
-    # Totales de nutrientes por planta
     gpal_cols = [c for c in df.columns if c.startswith("Rec_da_") and c.endswith("_gpalma")]
     if gpal_cols:
         df["Rec_total_n_gpalma"] = df[gpal_cols].sum(axis=1, min_count=1)
         df["Rec_total_n_kgpalma"] = pd.to_numeric(df["Rec_total_n_gpalma"], errors="coerce") / 1000.0
 
-    # ──────────────────────────────────────────────────────────────
-    # 3. Fuentes comerciales → Rec_*
-    # ──────────────────────────────────────────────────────────────
     fuente_map = {
         "urea": ["fuente_urea_kg_ha", "urea (kg/ha)", "urea_ (kg/ha)"],
         "spt": ["fuente_spt_kg_ha", "spt (kg/ha)"],
@@ -1879,13 +2016,9 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             continue
 
         df[f"Rec_{key}_kgha"] = df[found].apply(lambda x: to_float_safe(x, np.nan))
-
-        # g/palma y kg/palma: densidad TEÓRICA 143
         df[f"Rec_{key}_gpalma"] = kg_a_g_palma(df[f"Rec_{key}_kgha"])
         df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"])
 
-        # kg/lote: prioridad columna del motor (densidad real);
-        # si no, kg/ha × área × (densidad_real / 143)
         cand_lote_motor = find_col(df.columns, [f"fuente_{key}_kg_lote"])
         if cand_lote_motor:
             df[f"Rec_{key}_kglote"] = df[cand_lote_motor].apply(lambda x: to_float_safe(x, np.nan))
@@ -1942,9 +2075,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
     df["flag_caldol_detectada"] = any(v is not None for v in caldol.values())
 
-    # ──────────────────────────────────────────────────────────────
-    # 5. Fórmula compuesta y totales de fuentes
-    # ──────────────────────────────────────────────────────────────
     if "Formula_Kalini" in df.columns and "Formula (N-P-K-MgO-B)" not in df.columns:
         df["Formula (N-P-K-MgO-B)"] = df["Formula_Kalini"]
 
@@ -1967,7 +2097,8 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
     prod_cols = [c for c in ["ton_ha_observada", "ton_ha_modelada", "rff_calculo",
                              "fuente_rff", "especie", "flag_0g_1h", "flag_inferido",
-                             "flag_inmaduro", "densidad_real", "n_palmas_lote", "Foliar"]
+                             "flag_inmaduro", "flag_edad_faltante", "densidad_real",
+                             "n_palmas_lote", "Foliar"]
                  if c in df.columns]
 
     rec_orden_existentes = [c for c in COLUMNAS_REC_ORDEN if c in df.columns]
@@ -2053,7 +2184,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         "excel_bytes": buffer.getvalue(),
         "csv_bytes": csv_bytes,
     }
-
 
 # ════════════════════════════════════════════════════
 # 7. SIDEBAR
@@ -2211,7 +2341,7 @@ def main():
     if sel_material and material_col:
         df = df[df[material_col].astype(str).isin(sel_material)]
     if sel_edad and edad_col:
-        df = df[(df[edad_col] >= sel_edad[0]) & (df[edad_col] <= sel_edad[1])]
+        df = df[df[edad_col].isna() | ((df[edad_col] >= sel_edad[0]) & (df[edad_col] <= sel_edad[1]))]
 
     if df.empty:
         st.warning("Sin datos con los filtros actuales.")
