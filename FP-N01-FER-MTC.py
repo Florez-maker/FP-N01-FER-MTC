@@ -98,11 +98,11 @@ FOLIAR_RANGES = {
 }
 
 EXPORT_COEF = {
-    "S": 0.5, "Cu": 0.004, "Fe": 0.03, "Mn": 0.025, "Zn": 0.01,
+    "Cu": 0.004, "Fe": 0.03, "Mn": 0.025, "Zn": 0.01,
 }
 
 EFICIENCIA = {
-    "S": 0.40, "Cu": 1.00, "Fe": 1.00, "Mn": 1.00, "Zn": 1.00,
+    "Cu": 1.00, "Fe": 1.00, "Mn": 1.00, "Zn": 1.00,
 }
 
 DELTA = {
@@ -120,7 +120,7 @@ N_PALMAS = 143
 MACRO_ELEMS = {"N", "P", "K", "Ca", "Mg", "S"}
 MICRO_ELEMS = {"B", "Cu", "Fe", "Mn", "Zn"}
 
-ELEMENTOS_OFICIALES = {"N", "P", "K", "Ca", "Mg", "B"}
+ELEMENTOS_OFICIALES = {"N", "P", "K", "Ca", "Mg", "S", "B"}
 
 ELEMENTOS_CALCULO = ["N", "P", "K", "Ca", "Mg", "S", "B", "Cu", "Fe", "Mn", "Zn"]
 
@@ -130,6 +130,7 @@ DB_COEF_GUINEENSIS = {
     "K":  (10.4364,  -0.1356),
     "Ca": (3.4953,   -0.3007),
     "Mg": (4.3580,   -0.1892),
+    "S":  (1.043632, -0.013383),
     "B":  (0.013141, -0.001582),
 }
 
@@ -139,6 +140,7 @@ DB_COEF_HIBRIDO = {
     "K":  (11.3221, -0.3537),
     "Ca": (3.7766,  -0.1794),
     "Mg": (4.7183,  -0.0361),
+    "S":  (1.130900, -0.003850),
     "B":  (0.014119, -0.000262),
 }
 
@@ -152,10 +154,8 @@ FUENTES_KALINI = {
     "P":  {"fuente": "SPT",          "aporte": 0.46},
     "K":  {"fuente": "KCl",          "aporte": 0.60},
     "Ca": {"fuente": "Cal_dolomita", "aporte": 0.35},
-    # La Kieserita es fuente DUAL: aporta Mg (0.25) Y S (0.20).
     "Mg": {"fuente": "Kieserita",    "aporte": 0.25, "aporte_secundario": {"S": 0.20}},
     "B":  {"fuente": "Granubor",     "aporte": 0.15},
-    # El S restante (después de restar el que aporta la Kieserita) se cubre con Sulfato.
     "S":  {"fuente": "Sulfato",      "aporte": 0.20},
 }
 
@@ -378,6 +378,31 @@ def to_float_safe(valor, default=np.nan):
         return float(valor)
     except Exception:
         return default
+
+
+FRANJAS_EDAD = [
+    "0–3 (inmaduro)", "4–8", "9–13", "14–18",
+    "19–23", "24–28", "29+", "Sin edad",
+]
+
+
+def franja_edad(valor, sin_edad="Sin edad"):
+    edad = to_float_safe(valor, np.nan)
+    if pd.isna(edad):
+        return sin_edad
+    if edad <= 3:
+        return "0–3 (inmaduro)"
+    if edad <= 8:
+        return "4–8"
+    if edad <= 13:
+        return "9–13"
+    if edad <= 18:
+        return "14–18"
+    if edad <= 23:
+        return "19–23"
+    if edad <= 28:
+        return "24–28"
+    return "29+"
 
 
 def find_col(df_cols, candidates):
@@ -815,24 +840,21 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identifica
     if edad_col and edad_col in row.index:
         edad = to_float_safe(row.get(edad_col, np.nan), default=np.nan)
 
-    if not pd.isna(edad) and edad > 26:
-        if rff_col and rff_col in row.index:
-            rff_real = to_float_safe(row.get(rff_col, np.nan), default=np.nan)
-            if not pd.isna(rff_real) and rff_real > 0:
+    # ── Coincidencia con el modelo AGROPALMA: el dato REAL de ton/ha manda; ──
+    # la curva por edad solo aplica cuando no hay dato real.
+    if rff_col and rff_col in row.index:
+        rff_real = to_float_safe(row.get(rff_col, np.nan), default=np.nan)
+        if not pd.isna(rff_real) and rff_real > 0:
+            if not pd.isna(edad) and edad > 26:
                 return round(min(rff_real, PROD_MAX_MAYOR_26), 3), "dato_real_mayor_26"
-        rff_techo = calcular_produccion_modelada(edad, especie=especie)
-        if not pd.isna(rff_techo) and rff_techo > 0:
-            return rff_techo, "techo_mayor_26"
+            return round(rff_real, 3), "dato_real"
 
     if not pd.isna(edad):
         rff_modelado = calcular_produccion_modelada(edad, especie=especie)
         if not pd.isna(rff_modelado) and rff_modelado > 0:
+            if not pd.isna(edad) and edad > 26:
+                return rff_modelado, "techo_mayor_26"
             return rff_modelado, "curva_variedad_edad"
-
-    if rff_col and rff_col in row.index:
-        rff = to_float_safe(row.get(rff_col, np.nan), default=np.nan)
-        if not pd.isna(rff) and rff > 0:
-            return rff, "dato_real_respaldo"
 
     return PROD_DEFAULT, "respaldo"
 
@@ -1510,23 +1532,8 @@ def tab_resumen(df: pd.DataFrame):
                 else:
                     if modo_edad == "Franja etaria":
                         col_edad = "Franja de edad"
-
-                        def _franja(x):
-                            v = to_float_safe(x, np.nan)
-                            if pd.isna(v):
-                                return "Sin edad"
-                            if v <= 3:
-                                return "0–3 (inmaduro)"
-                            if v <= 8:
-                                return "4–8"
-                            if v <= 13:
-                                return "9–13"
-                            return "14+"
-
-                        base[col_edad] = base[edad_col_f].apply(_franja)
-                        orden_cat = pd.CategoricalDtype(
-                            ["0–3 (inmaduro)", "4–8", "9–13", "14+", "Sin edad"], ordered=True
-                        )
+                        base[col_edad] = base[edad_col_f].apply(franja_edad)
+                        orden_cat = pd.CategoricalDtype(FRANJAS_EDAD, ordered=True)
                         base[col_edad] = base[col_edad].astype(orden_cat)
                     else:
                         col_edad = "Edad (años)"
@@ -1738,7 +1745,7 @@ def tab_agrupaciones(df: pd.DataFrame):
         franjas_edad = False
         if edad_col_real and edad_col_real in grupo_cols_preview:
             franjas_edad = st.checkbox(
-                "Convertir edad en franjas etarias (≤3, 4–8, 9–13, 14+)",
+                "Convertir edad en franjas etarias (≤3, 4–8, 9–13, 14–18, 19–23, 24–28, 29+)",
                 value=False, key="agr_franjas",
                 help="Reduce la cantidad de grupos (y de fórmulas distintas) al agrupar por edad.",
             )
@@ -1759,20 +1766,8 @@ def tab_agrupaciones(df: pd.DataFrame):
     trabajo = df[grupo_cols].copy()
 
     if franjas_edad and edad_col_real and edad_col_real in grupo_cols:
-        def _franja(x):
-            v = to_float_safe(x, np.nan)
-            if pd.isna(v):
-                return np.nan
-            if v <= 3:
-                return "0–3 (inmaduro)"
-            if v <= 8:
-                return "4–8"
-            if v <= 13:
-                return "9–13"
-            return "14+"
-
         nombre_f = f"{edad_col_real}_franja"
-        trabajo[nombre_f] = trabajo[edad_col_real].apply(_franja)
+        trabajo[nombre_f] = trabajo[edad_col_real].apply(franja_edad)
         grupo_cols[grupo_cols.index(edad_col_real)] = nombre_f
         trabajo = trabajo.drop(columns=[edad_col_real])
 
@@ -1787,9 +1782,8 @@ def tab_agrupaciones(df: pd.DataFrame):
         st.error(f"Error al agrupar: {e}")
         return
 
-    # kg/palma y g/palma → 4 decimales (valores pequeños); resto → 2
-    vl = var_num.lower()
-    decimals = 4 if ("gpalma" in vl or "_g_palma" in vl or "kgpalma" in vl or "_kg_palma" in vl) else 2
+    # Estadísticas a 2 decimales
+    decimals = 2
     agg['sum']  = agg['sum'].round(decimals)
     agg['mean'] = agg['mean'].round(decimals)
     agg['min']  = agg['min'].round(decimals)
