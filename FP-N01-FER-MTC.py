@@ -24,7 +24,6 @@ COLORS = {
     "primary": "#1b60a7",
     "success": "#2ca02c",
     "danger":  "#d62728",
-
     "warning": "#F1C40F",
     "info":    "#17becf",
 }
@@ -83,18 +82,35 @@ st.markdown("""
 # 1. CONSTANTES AGRONÓMICAS
 # ════════════════════════════════════════════════════
 
+# ── Rangos foliares PP — Palma Productiva (edad > EDAD_INMADURA_MAX) ──
+# Faixa Ótima (Suficiência): macros en % (input g/kg ÷ 10), micros ppm → %
 FOLIAR_RANGES = {
-    "N":  {"min": 2.50,   "max": 2.80,   "unidad": "g/kg"},
-    "P":  {"min": 0.16,   "max": 0.19,   "unidad": "g/kg"},
-    "K":  {"min": 1.25,   "max": 1.45,   "unidad": "g/kg"},
-    "Ca": {"min": 0.55,   "max": 0.75,   "unidad": "g/kg"},
-    "Mg": {"min": 0.25,   "max": 0.40,   "unidad": "g/kg"},
-    "S":  {"min": 0.20,   "max": 0.25,   "unidad": "g/kg"},
-    "B":  {"min": 0.0020, "max": 0.0045, "unidad": "ppm"},
-    "Cu": {"min": 0.0005, "max": 0.0007, "unidad": "ppm"},
-    "Fe": {"min": 0.0080, "max": 0.0160, "unidad": "ppm"},
-    "Mn": {"min": 0.0060, "max": 0.0200, "unidad": "ppm"},
-    "Zn": {"min": 0.0015, "max": 0.0040, "unidad": "ppm"},
+    "N":  {"min": 2.50,   "max": 2.80,   "unidad": "g/kg"},   # 2,50–2,80 %
+    "P":  {"min": 0.16,   "max": 0.19,   "unidad": "g/kg"},   # 0,16–0,19 %
+    "K":  {"min": 1.25,   "max": 1.45,   "unidad": "g/kg"},   # 1,25–1,45 %
+    "Ca": {"min": 0.55,   "max": 0.75,   "unidad": "g/kg"},   # 0,55–0,75 %
+    "Mg": {"min": 0.25,   "max": 0.40,   "unidad": "g/kg"},   # 0,25–0,40 %
+    "S":  {"min": 0.20,   "max": 0.25,   "unidad": "g/kg"},   # 0,20–0,25 %
+    "B":  {"min": 0.0020, "max": 0.0045, "unidad": "ppm"},    # 20–45 ppm
+    "Cu": {"min": 0.0005, "max": 0.0008, "unidad": "ppm"},    # 5–8 ppm
+    "Fe": {"min": 0.0080, "max": 0.0160, "unidad": "ppm"},    # 80–160 ppm
+    "Mn": {"min": 0.0060, "max": 0.0200, "unidad": "ppm"},    # 60–200 ppm
+    "Zn": {"min": 0.0015, "max": 0.0040, "unidad": "ppm"},    # 15–40 ppm
+}
+
+# ── Rangos foliares PNP — Palma No Productiva / inmadura (edad ≤ EDAD_INMADURA_MAX) ──
+FOLIAR_RANGES_PNP = {
+    "N":  {"min": 2.80,   "max": 3.20,   "unidad": "g/kg"},   # 2,80–3,20 %
+    "P":  {"min": 0.17,   "max": 0.22,   "unidad": "g/kg"},   # 0,17–0,22 %
+    "K":  {"min": 1.30,   "max": 1.60,   "unidad": "g/kg"},   # 1,30–1,60 %
+    "Ca": {"min": 0.60,   "max": 0.80,   "unidad": "g/kg"},   # 0,60–0,80 %
+    "Mg": {"min": 0.24,   "max": 0.40,   "unidad": "g/kg"},   # 0,24–0,40 %
+    "S":  {"min": 0.22,   "max": 0.30,   "unidad": "g/kg"},   # 0,22–0,30 %
+    "B":  {"min": 0.0020, "max": 0.0040, "unidad": "ppm"},    # 20–40 ppm
+    "Cu": {"min": 0.0005, "max": 0.0008, "unidad": "ppm"},    # 5–8 ppm
+    "Fe": {"min": 0.0080, "max": 0.0160, "unidad": "ppm"},    # 80–160 ppm
+    "Mn": {"min": 0.0060, "max": 0.0200, "unidad": "ppm"},    # 60–200 ppm
+    "Zn": {"min": 0.0015, "max": 0.0040, "unidad": "ppm"},    # 15–40 ppm
 }
 
 EXPORT_COEF = {
@@ -164,6 +180,7 @@ FUENTES_EXCLUIDAS_FORMULA = {"cal_dolomita"}
 ELEMENTOS_DESCOMPOSICION = ["N", "P", "K", "Ca", "Mg", "S", "B"]
 
 DENSIDAD_TEORICA_HA = 143
+# PNP (Palma No Productiva / inmadura): edad <= 3 según el modelo AGROPALMA
 EDAD_INMADURA_MAX   = 3
 
 N_PALMAS = DENSIDAD_TEORICA_HA
@@ -589,10 +606,13 @@ def foliar_a_pct(valor, elem):
     return valor / 10.0
 
 def get_foliar_ranges(edad=np.nan):
-
+    """Rangos foliares según etapa del cultivo:
+    PNP (Palma No Productiva, edad ≤ EDAD_INMADURA_MAX) o PP (Palma Productiva).
+    Si el Excel trae una hoja 'niveles_optimos', esa tabla personalizada
+    tiene prioridad para los lotes inmaduros."""
     e = to_float_safe(edad, default=np.nan)
-    if (not pd.isna(e)) and e <= EDAD_INMADURA_MAX and NIVELES_OPTIMOS_INMADURO:
-        return NIVELES_OPTIMOS_INMADURO
+    if (not pd.isna(e)) and e <= EDAD_INMADURA_MAX:
+        return NIVELES_OPTIMOS_INMADURO if NIVELES_OPTIMOS_INMADURO else FOLIAR_RANGES_PNP
     return FOLIAR_RANGES
 
 
@@ -658,12 +678,12 @@ def calc_fator_reajuste(val_pct, elem, edad=np.nan):
 
 
 def calc_demanda_bruta(elem, rff, flag_0g_1h, edad=np.nan):
-    """Demanda bruta (kg/ha) con LÍMITE INFERIOR 0 (evita restas en fuentes totales).
-    Plantación INMADURA (edad <= 3): exportación = 0 → el cálculo queda concentrado
-    en la corrección de los teores foliares (acuerdo Kalini)."""
-    edad_f = to_float_safe(edad, default=np.nan)
-    if (not pd.isna(edad_f)) and edad_f <= EDAD_INMADURA_MAX:
-        return 0.0
+    """Demanda bruta (kg/ha) con límite inferior de cero.
+
+    Para reproducir el archivo de referencia AGROPALMA, la ecuación de
+    demanda se aplica con el RFF seleccionado para todas las edades,
+    incluyendo lotes inmaduros cuando exista `ton/ha` real.
+    """
     rff = to_float_safe(rff, default=np.nan)
     if pd.isna(rff):
         return 0.0
@@ -862,9 +882,14 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identifica
 def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
     """
     Descompone cada nutriente en su fuente comercial usando la
-    RECOMENDACIÓN FINAL (nec_*), que ya incluye la eficiencia de
-    fertilización (para S: nec_S = da_S / 0.40). Si nec_* no existe
-    para un elemento, cae a da_* como respaldo (compatibilidad).
+    RECOMENDACIÓN FINAL (nec_*). Para N, P, K, Ca, Mg, S y B:
+    nec_* = da_* (eficiencia 1.0, ELEMENTOS_OFICIALES). Si nec_* no
+    existe para un elemento, cae a da_* como respaldo (compatibilidad).
+
+    Reglas de descomposición (tabla de fuentes oficial):
+        Kieserita (Mg, 25 %) aporta S secundario (20 % de su dosis);
+        el Sulfato cubre el saldo de S con su aporte del 20 %:
+        Sulfato = max(0, nec_S − Kieserita × 0.20) / 0.20
     """
     df = df.copy()
     ha_cols, lote_cols, gpalma_cols = [], [], []
@@ -888,15 +913,30 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
         nombre_key = fuente_nombre.lower()
 
         if elem in aporte_secundario_acum:
-            base_efectivo = (df[base_col] - aporte_secundario_acum[elem]).clip(lower=0)
+            aporte_secundario = aporte_secundario_acum[elem]
+            base_efectivo = (df[base_col] - aporte_secundario).clip(lower=0)
+            # ── Trazabilidad QA del sulfato ──
+            if elem == "S":
+                df["S_necesidad_final_kg_ha"] = df[base_col].round(6)
+                df["S_aportado_kieserita_kg_ha"] = aporte_secundario.round(6)
+                df["S_saldo_para_sulfato_kg_ha"] = base_efectivo.round(6)
         else:
             base_efectivo = df[base_col]
+            if elem == "S":
+                df["S_necesidad_final_kg_ha"] = df[base_col].round(6)
+                df["S_aportado_kieserita_kg_ha"] = 0.0
+                df["S_saldo_para_sulfato_kg_ha"] = base_efectivo.round(6)
 
         ha_c = f"fuente_{nombre_key}_kg_ha"
         lo_c = f"fuente_{nombre_key}_kg_lote"
         gp_c = f"fuente_{nombre_key}_g_palma"
 
         df[ha_c] = (base_efectivo / apor).round(6)
+
+        # ── Trazabilidad QA: dosis final de sulfato ──
+        if elem == "S":
+            df["Sulfato_calculado_kg_ha"] = df[ha_c]
+
         df[lo_c] = kg_lote_desde_kgha(df[ha_c], area_serie, densidad_serie).round(6)
         df[gp_c] = kg_a_g_palma(df[ha_c]).round(6)
 
@@ -1018,9 +1058,10 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
     # ── QA: lotes sin edad se conservan, solo se marcan (no se eliminan) ──
     df["flag_edad_faltante"] = edad_serie.isna().astype(int)
 
+    # La edad se conserva únicamente como atributo de trazabilidad.
+    # No altera el RFF ni la demanda nutricional: el archivo AGROPALMA usa
+    # el `ton/ha` real también para edades <= 3 cuando está disponible.
     df["flag_inmaduro"] = edad_serie.notna() & (edad_serie <= EDAD_INMADURA_MAX)
-    df.loc[df["flag_inmaduro"], "rff_calculo"] = 0.0
-    df.loc[df["flag_inmaduro"], "fuente_rff"] = "inmaduro_sin_exportacion"
 
     df = imputar_foliares(df)
 
@@ -1094,7 +1135,7 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
         df["total_g_palma"] = np.nan
         df["total_kg_palma"] = np.nan
 
-    # ── Trazabilidad QA: DA de S antes de aplicar la eficiencia (0.40) ──
+    # ── Trazabilidad QA: DA de S (nec_S = da_S, sin eficiencia adicional) ──
     if "da_s_kg_ha" in df.columns:
         df["da_S_preEficiencia_kg_ha"] = df["da_s_kg_ha"]
 
@@ -1169,8 +1210,9 @@ def tab_info():
          "Se calcula la cantidad inicial de nutriente requerida según las "
          "toneladas de RFF por hectárea.", "#2ca02c"),
         ("3", "Corrección foliar",
-         "La demanda se compara contra el rango foliar objetivo. Si está bajo, "
-         "se corrige; si está alto, se reduce.", "#f39c12"),
+         "La demanda se compara contra el rango foliar objetivo según la edad: "
+         "rangos PNP para edad ≤ 3 (inmadura) y rangos PP para el resto. "
+         "Si está bajo, se corrige; si está alto, se reduce.", "#f39c12"),
         ("4", "Fuentes de Kalini",
          "Cada nutriente se convierte en dosis de su fuente comercial (Urea, "
          "SPT, KCl, Kieserita, Granubor, Cal dolomita) y se arma el compuesto.",
@@ -1365,7 +1407,6 @@ def tab_resumen(df: pd.DataFrame):
 
     n_total = len(df)
 
-    # ── Avisos de integridad ──
     n_inferidos = 0
     pct = 0.0
     if "flag_inferido" in df.columns:
@@ -1393,7 +1434,6 @@ def tab_resumen(df: pd.DataFrame):
                 f"dataset (no se eliminaron) usando RFF de respaldo. Revisa `flag_edad_faltante`."
             )
 
-    # ── Tabla nutricional ──
     elementos = []
     for cand in ELEMENTOS_CALCULO:
         fol_cand = find_col(df.columns, [f"fol_pct_{cand.lower()}", f"fol_pct_{cand.upper()}", f"fol_pct_{cand}"])
@@ -1483,7 +1523,6 @@ def tab_resumen(df: pd.DataFrame):
                                             "Formula (N-P-K-MgO-S-B)", "formula_kalini", "formula"])
 
         if formula_col and formula_col in df.columns:
-            # ── Fórmulas globales más frecuentes ──
             st.markdown(
                 '<div class="section-title">Fórmulas compuestas más frecuentes</div>',
                 unsafe_allow_html=True
@@ -1502,9 +1541,6 @@ def tab_resumen(df: pd.DataFrame):
             else:
                 st.info("No hay fórmulas compuestas para mostrar.")
 
-            # ══════════════════════════════════════════════════════════
-            # Fórmulas compuestas POR EDAD (solicitud Kalini)
-            # ══════════════════════════════════════════════════════════
             edad_col_f = find_col(df.columns, ["edad", "age", "anos", "ano_planta", "idade"])
             if edad_col_f:
                 st.markdown(
@@ -1539,7 +1575,6 @@ def tab_resumen(df: pd.DataFrame):
                         col_edad = "Edad (años)"
                         base[col_edad] = base[edad_col_f].apply(lambda x: to_float_safe(x, np.nan)).round(0)
 
-                    # Tabla: conteo de lotes por (edad, fórmula) + % dentro del grupo de edad
                     tab_formula_edad = (
                         base.groupby([col_edad, "_formula"], observed=True)
                         .size()
@@ -1569,7 +1604,6 @@ def tab_resumen(df: pd.DataFrame):
                         st.markdown("##### Variabilidad por edad")
                         st.dataframe(n_formulas_por_edad, use_container_width=True, hide_index=True)
 
-                    # Fórmula modal (más frecuente) por grupo de edad
                     modal = (
                         tab_formula_edad.sort_values("Lotes", ascending=False)
                         .drop_duplicates(subset=[col_edad])
@@ -1699,8 +1733,6 @@ def tab_agrupaciones(df: pd.DataFrame):
         candidate_num.append(c)
 
     if not candidate_num:
-        # Fallback: búsqueda directa por sufijo (kgpalma ANTES que gpalma:
-        # "gpalma" es subcadena de "kgpalma" y contaminaría la lista)
         for c in df.columns:
             cl = c.lower()
             if unidad_opt == "kgha" and (cl.endswith("_kgha") or cl.endswith("_kg_ha")):
@@ -1738,7 +1770,7 @@ def tab_agrupaciones(df: pd.DataFrame):
                 "franja etaria dentro de cada departamento, para reducir el número de fórmulas)."
             ),
         )
-        if multi_col not in opciones_multi:   # guard ante cambios de selección
+        if multi_col not in opciones_multi:
             multi_col = "(ninguno)"
 
         grupo_cols_preview = [c for c in [agrup_col, multi_col] if c and c != "(ninguno)"]
@@ -1782,7 +1814,6 @@ def tab_agrupaciones(df: pd.DataFrame):
         st.error(f"Error al agrupar: {e}")
         return
 
-    # Estadísticas a 2 decimales
     decimals = 2
     agg['sum']  = agg['sum'].round(decimals)
     agg['mean'] = agg['mean'].round(decimals)
@@ -1858,7 +1889,6 @@ def _to_kg_palma_from_g_palma(g_palma_series):
 
 
 def _round_cols(df, decimals_default=2, decimals_gpalma=4):
-    """Redondeo: 2 dec por defecto; *_gpalma y *_kgpalma → 4 dec; fol_pct_* → 5 dec."""
     df = df.copy()
     for c in df.columns:
         if df[c].dtype in [np.float64, np.float32, float]:
