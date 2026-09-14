@@ -855,30 +855,55 @@ def calcular_produccion_modelada(edad, especie="No_identificado"):
     return round(prod, 3)
 
 
-def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identificado"):
+def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identificado",
+                        modo="agronomo"):
+    """Selecciona el RFF de cálculo según el modo elegido.
+
+    modo="agronomo"  → manda el dato real de ton/ha (el 0 es válido);
+                       si no hay dato, cae a la curva por edad; si no hay
+                       edad, usa el respaldo.
+    modo="regresion" → manda la curva modelada por edad y variedad;
+                       si no hay edad, cae al dato real; si no hay nada,
+                       usa el respaldo.
+    """
     edad = np.nan
     if edad_col and edad_col in row.index:
         edad = to_float_safe(row.get(edad_col, np.nan), default=np.nan)
 
+    rff_real = np.nan
     if rff_col and rff_col in row.index:
         rff_real = to_float_safe(row.get(rff_col, np.nan), default=np.nan)
 
+    if modo == "agronomo":
+        # 1) Dato real (incluye 0 como producción válida)
         if not pd.isna(rff_real) and rff_real >= 0:
             if not pd.isna(edad) and edad > 26:
                 return round(min(rff_real, PROD_MAX_MAYOR_26), 3), "dato_real_mayor_26"
-
             return round(rff_real, 3), "dato_real"
+        # 2) Curva por edad
+        if not pd.isna(edad):
+            rff_modelado = calcular_produccion_modelada(edad, especie=especie)
+            if not pd.isna(rff_modelado) and rff_modelado >= 0:
+                if edad > 26:
+                    return rff_modelado, "techo_mayor_26"
+                return rff_modelado, "curva_variedad_edad"
+        # 3) Respaldo
+        return PROD_DEFAULT, "respaldo"
 
+    # modo == "regresion": la curva por edad manda
     if not pd.isna(edad):
         rff_modelado = calcular_produccion_modelada(edad, especie=especie)
-
         if not pd.isna(rff_modelado) and rff_modelado >= 0:
             if edad > 26:
                 return rff_modelado, "techo_mayor_26"
-
             return rff_modelado, "curva_variedad_edad"
 
+    # Sin edad: cae al dato real si existe
+    if not pd.isna(rff_real) and rff_real >= 0:
+        return round(rff_real, 3), "dato_real"
+
     return PROD_DEFAULT, "respaldo"
+
 
 def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
     """
@@ -998,7 +1023,7 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
     return df
 
 
-def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
+def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFrame:
 
     df = df.copy()
 
@@ -1035,7 +1060,8 @@ def calculadora_fert(df: pd.DataFrame) -> pd.DataFrame:
         prod_modelada = calcular_produccion_modelada(edad_val, especie=especie)
         prod_observada = row.get(rff_col, np.nan) if rff_col is not None else np.nan
         prod_observada = to_float_safe(prod_observada, default=np.nan)
-        rff, fuente = obtener_rff_calculo(row, rff_col=rff_col, edad_col=edad_col, especie=especie)
+        rff, fuente = obtener_rff_calculo(row, rff_col=rff_col, edad_col=edad_col,
+                                          especie=especie, modo=modo_rff)
 
         rff_res.append(round(rff, 3))
         fuente_res.append(fuente)
@@ -1172,7 +1198,6 @@ def seccion_kpis(df: pd.DataFrame):
     kpi_card(cols[3], "Edad media",  f"{df[edad_col].mean():.1f} años" if edad_col else "—",   icon="📅")
     kpi_card(cols[4], "RFF medio",   f"{df[rff_col].mean():.2f} t/ha" if rff_col else "—",    icon="📊", color="#1A6B3C")
 
-
 def tab_info():
     st.markdown(
         '<div class="section-title">¿Cómo funciona la calculadora?</div>',
@@ -1205,8 +1230,10 @@ def tab_info():
     pasos = [
         ("1", "Rendimiento y genética",
          "Se identifica la variedad o material y se selecciona la ecuación: "
-         "Guineensis o Híbrido OxG. Para edad > 26 se usa el dato real con "
-         "techo de 14 ton/ha.", "#1b60a7"),
+         "Guineensis o Híbrido OxG. El RFF se toma según el modo elegido en "
+         "la barra lateral: Agrónomo (ton/ha real, el 0 es válido) o "
+         "Regresión (curva modelada por edad). Para edad > 26 se aplica "
+         "techo de 14 t/ha.", "#1b60a7"),
         ("2", "Demanda bruta",
          "Se calcula la cantidad inicial de nutriente requerida según las "
          "toneladas de RFF por hectárea.", "#2ca02c"),
@@ -1249,6 +1276,22 @@ def tab_info():
                 """,
                 unsafe_allow_html=True
             )
+
+    st.markdown(
+        """
+        <div style="background: #F0F7FF; border-left: 4px solid #1b60a7;
+                    padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 0.65rem;">
+            <b>⚙️ Modo de productividad (RFF)</b><br>
+            <span style="font-size: 0.85rem;">
+            <b>Agrónomo (última producción):</b> usa el ton/ha real del archivo
+            (el 0 es válido). Si falta el dato, cae a la curva por edad.<br>
+            <b>Regresión (curva por edad):</b> usa la curva modelada por edad y
+            material. Si falta la edad, cae al dato real.
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     col_formula, col_rules = st.columns([1.15, 1])
 
@@ -2269,7 +2312,20 @@ def render_sidebar():
             "acentos, espacios y caracteres especiales."
         )
         st.markdown("---")
-    return uploaded
+
+        st.markdown("### ⚙️ Modo de productividad (RFF)")
+        modo_rff = st.radio(
+            "Fuente del RFF para el cálculo:",
+            options=["Agrónomo (última producción)", "Regresión (curva por edad)"],
+            index=0,
+            key="modo_rff",
+            help=(
+                "Agrónomo: usa el ton/ha real del archivo (el 0 es válido). "
+                "Regresión: usa la curva modelada por edad y material."
+            ),
+        )
+        st.markdown("---")
+    return uploaded, modo_rff
 
 # ════════════════════════════════════════════════════
 # 8. MAIN
@@ -2277,7 +2333,7 @@ def render_sidebar():
 
 
 def main():
-    uploaded = render_sidebar()
+    uploaded, modo_rff = render_sidebar()
 
     st.markdown("""
     <div class="main-header">
@@ -2309,7 +2365,8 @@ def main():
             file_bytes = uploaded.read()
             cargar_niveles_optimos(file_bytes)
             data = cargar_dataset(file_bytes, file_name=uploaded.name)
-            data = calculadora_fert(data)
+            modo_rff_key = "agronomo" if modo_rff.startswith("Agrónomo") else "regresion"
+            data = calculadora_fert(data, modo_rff=modo_rff_key)
         except Exception as e:
             st.error(f"❌ Error al procesar archivo: {e}")
             st.exception(e)
@@ -2318,6 +2375,17 @@ def main():
     if data.empty:
         st.warning("El archivo no contiene datos válidos.")
         return
+
+    if modo_rff_key == "regresion":
+        st.caption(
+            "⚙️ Modo activo: **Regresión (curva por edad)** — el RFF se calcula "
+            "con la curva modelada por edad y material. Revisa `fuente_rff` en el export."
+        )
+    else:
+        st.caption(
+            "⚙️ Modo activo: **Agrónomo (última producción)** — se usa el ton/ha "
+            "real del archivo (el 0 es válido). Revisa `fuente_rff` en el export."
+        )
 
     finca_col = find_col(data.columns, ["finca"])
     departamento_col = find_col(data.columns, ["departamento", "depto", "region"])
