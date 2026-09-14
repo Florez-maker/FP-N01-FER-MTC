@@ -860,24 +860,25 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identifica
     if edad_col and edad_col in row.index:
         edad = to_float_safe(row.get(edad_col, np.nan), default=np.nan)
 
-    # ── Coincidencia con el modelo AGROPALMA: el dato REAL de ton/ha manda; ──
-    # la curva por edad solo aplica cuando no hay dato real.
     if rff_col and rff_col in row.index:
         rff_real = to_float_safe(row.get(rff_col, np.nan), default=np.nan)
-        if not pd.isna(rff_real) and rff_real > 0:
+
+        if not pd.isna(rff_real) and rff_real >= 0:
             if not pd.isna(edad) and edad > 26:
                 return round(min(rff_real, PROD_MAX_MAYOR_26), 3), "dato_real_mayor_26"
+
             return round(rff_real, 3), "dato_real"
 
     if not pd.isna(edad):
         rff_modelado = calcular_produccion_modelada(edad, especie=especie)
-        if not pd.isna(rff_modelado) and rff_modelado > 0:
-            if not pd.isna(edad) and edad > 26:
+
+        if not pd.isna(rff_modelado) and rff_modelado >= 0:
+            if edad > 26:
                 return rff_modelado, "techo_mayor_26"
+
             return rff_modelado, "curva_variedad_edad"
 
     return PROD_DEFAULT, "respaldo"
-
 
 def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
     """
