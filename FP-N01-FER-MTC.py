@@ -461,10 +461,9 @@ def kg_a_kg_palma(kgha_s, densidad_s=None):
     return (s / dens).replace([np.inf, -np.inf], np.nan)
 
 
-def kg_lote_desde_kgha(kgha_s, area_s, densidad_s):
+def kg_lote_desde_kgha(kgha_s, area_s, densidad_s=None):
     kgha = pd.to_numeric(kgha_s, errors="coerce")
     area = pd.to_numeric(area_s, errors="coerce")
-    dens = pd.to_numeric(densidad_s, errors="coerce").fillna(DENSIDAD_TEORICA_HA)
     return (kgha * area).replace([np.inf, -np.inf], np.nan)
 
 def _factor_densidad(df, index):
@@ -2146,10 +2145,33 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
                           "material", "variedad", "manejo", area_col, n_palmas_col]
     id_cols = [c for c in id_cols_candidates if c and c in df.columns]
 
-    prod_cols = [c for c in ["rff_calculo", "fuente_rff", "especie", "flag_0g_1h",
-                             "flag_inferido", "flag_inmaduro", "flag_edad_faltante",
-                             "densidad_real", "n_palmas_lote", "Foliar"]
-                 if c in df.columns]
+    internas_prod = ["rff_calculo", "fuente_rff", "ton_ha_observada", "ton_ha_modelada"]
+
+    prod_orig = None
+    for cand in ["ton_ha", "ton/ha", "rff_ton_ha", "produccion_ton_ha",
+                 "produccion", "producción", "rff", "ffb", "racimos"]:
+        if cand in df.columns:
+            prod_orig = cand
+            break
+    if prod_orig is None:
+        for cand in ["rff", "produccion", "producción", "ffb", "racimos"]:
+            _c = find_col(df.columns, [cand])
+            if _c and _c not in internas_prod:
+                prod_orig = _c
+                break
+
+    if prod_orig:
+        prod_cols = [prod_orig]
+    elif "rff_calculo" in df.columns:
+        if "ton_ha" not in df.columns:
+            df = df.rename(columns={"rff_calculo": "ton_ha"})
+        prod_cols = ["ton_ha"]
+    else:
+        prod_cols = []
+
+    for c in ["especie", "densidad_real", "n_palmas_lote", "Foliar"]:
+        if c in df.columns:
+            prod_cols.append(c)
 
     rec_orden_existentes = [c for c in COLUMNAS_REC_ORDEN if c in df.columns]
 
