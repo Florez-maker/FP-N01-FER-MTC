@@ -258,7 +258,7 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
             df[f"Rec_da_{e}_kglote"] = kg_lote_desde_kgha(df[f"Rec_da_{e}_kgha"], area_s, dens_s)
 
         if cand_gpalma and cand_gpalma in df.columns:
-            df[f"Rec_da_{e}_gpalma"] = pd.to_numeric(df[cand_gpalma], errors="coerce")
+            df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kgha(df[f"Rec_da_{e}_kgha"], DENSIDAD_TEORICA_HA)
         elif f"Rec_da_{e}_kgha" in df.columns:
             df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kgha(df[f"Rec_da_{e}_kgha"], dens_s)
         elif f"Rec_da_{e}_kglote" in df.columns and area_col in df.columns:
@@ -1989,7 +1989,6 @@ COLUMNAS_REC_ORDEN = [
     "Rec_caldol_kgpalma", "Rec_caldol_tonlote",
 ]
 
-
 def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
     df = df.copy()
@@ -2008,6 +2007,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
     area_s = df[area_col].apply(lambda x: to_float_safe(x, np.nan)) if area_col in df.columns else pd.Series(np.nan, index=df.index)
     n_palmas_s = df[n_palmas_col].apply(lambda x: to_float_safe(x, np.nan)) if n_palmas_col in df.columns else pd.Series(np.nan, index=df.index)
+
+    # ── Regla de conversión (convención AGROPALMA) ─────────────────────────
+    # kg/lote  = kg/ha × área            (independiente de la densidad)
+    # g/palma  = kg/ha × 1000 / 143      (SIEMPRE densidad teórica 143)
+    # kg/palma = kg/ha / 143             (SIEMPRE densidad teórica 143)
+    # ────────────────────────────────────────────────────────────────────────
 
     for e in ["N", "P", "K", "Ca", "Mg", "B", "S"]:
         if e == "S":
@@ -2033,12 +2038,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         if cand_gpalma:
             df[f"Rec_da_{e}_gpalma"] = df[cand_gpalma].apply(lambda x: to_float_safe(x, np.nan))
         elif cand_ha:
-            df[f"Rec_da_{e}_gpalma"] = kg_a_g_palma(df[f"Rec_da_{e}_kgha"], dens_s)
-        elif f"Rec_da_{e}_kglote" in df.columns and n_palmas_col in df.columns:
-            df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_da_{e}_kglote"], n_palmas_s)
+            df[f"Rec_da_{e}_gpalma"] = kg_a_g_palma(df[f"Rec_da_{e}_kgha"], DENSIDAD_TEORICA_HA)
+        elif f"Rec_da_{e}_kglote" in df.columns and area_col in df.columns:
+            df[f"Rec_da_{e}_gpalma"] = kg_a_g_palma(df[f"Rec_da_{e}_kglote"] / area_s, DENSIDAD_TEORICA_HA)
 
         if f"Rec_da_{e}_kgha" in df.columns:
-            df[f"Rec_da_{e}_kgpalma"] = kg_a_kg_palma(df[f"Rec_da_{e}_kgha"], dens_s)
+            df[f"Rec_da_{e}_kgpalma"] = kg_a_kg_palma(df[f"Rec_da_{e}_kgha"], DENSIDAD_TEORICA_HA)
         elif f"Rec_da_{e}_gpalma" in df.columns:
             df[f"Rec_da_{e}_kgpalma"] = pd.to_numeric(df[f"Rec_da_{e}_gpalma"], errors="coerce") / 1000.0
 
@@ -2066,8 +2071,8 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             continue
 
         df[f"Rec_{key}_kgha"] = df[found].apply(lambda x: to_float_safe(x, np.nan))
-        df[f"Rec_{key}_gpalma"] = kg_a_g_palma(df[f"Rec_{key}_kgha"], dens_s)
-        df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"], dens_s)
+        df[f"Rec_{key}_gpalma"] = kg_a_g_palma(df[f"Rec_{key}_kgha"], DENSIDAD_TEORICA_HA)
+        df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"], DENSIDAD_TEORICA_HA)
 
         cand_lote_motor = find_col(df.columns, [f"fuente_{key}_kg_lote"])
         if cand_lote_motor:
@@ -2109,12 +2114,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     if caldol["gpalma"]:
         df["Rec_caldol_gpalma"] = df[caldol["gpalma"]].apply(lambda x: to_float_safe(x, np.nan))
     elif "Rec_caldol_kgha" in df.columns:
-        df["Rec_caldol_gpalma"] = kg_a_g_palma(df["Rec_caldol_kgha"], dens_s)
-    elif "Rec_caldol_kglote" in df.columns and n_palmas_col in df.columns:
-        df["Rec_caldol_gpalma"] = _to_g_palma_from_kg_lote(df["Rec_caldol_kglote"], n_palmas_s)
+        df["Rec_caldol_gpalma"] = kg_a_g_palma(df["Rec_caldol_kgha"], DENSIDAD_TEORICA_HA)
+    elif "Rec_caldol_kglote" in df.columns and area_col in df.columns:
+        df["Rec_caldol_gpalma"] = kg_a_g_palma(df["Rec_caldol_kglote"] / area_s, DENSIDAD_TEORICA_HA)
 
     if "Rec_caldol_kgha" in df.columns:
-        df["Rec_caldol_kgpalma"] = kg_a_kg_palma(df["Rec_caldol_kgha"], dens_s)
+        df["Rec_caldol_kgpalma"] = kg_a_kg_palma(df["Rec_caldol_kgha"], DENSIDAD_TEORICA_HA)
     elif "Rec_caldol_gpalma" in df.columns:
         df["Rec_caldol_kgpalma"] = pd.to_numeric(df["Rec_caldol_gpalma"], errors="coerce") / 1000.0
 
@@ -2145,6 +2150,11 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
                           "material", "variedad", "manejo", area_col, n_palmas_col]
     id_cols = [c for c in id_cols_candidates if c and c in df.columns]
 
+    # ── Producción: UNA sola columna en el export ──────────────────────────
+    # Se exporta únicamente la columna de producción original del usuario
+    # (ton/ha, ton_ha, rff, ...). Las columnas internas del motor
+    # (rff_calculo, fuente_rff, ton_ha_observada, ton_ha_modelada) y los
+    # flags de inferencia se ocultan: el Excel queda "ton/ha → resultados".
     internas_prod = ["rff_calculo", "fuente_rff", "ton_ha_observada", "ton_ha_modelada"]
 
     prod_orig = None
@@ -2256,6 +2266,7 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         "excel_bytes": buffer.getvalue(),
         "csv_bytes": csv_bytes,
     }
+
 
 # ════════════════════════════════════════════════════
 # 7. SIDEBAR
