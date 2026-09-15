@@ -220,6 +220,7 @@ def normalize_col(col: str) -> str:
     col = re.sub(r"_+", "_", col).strip("_")
     return col
 
+
 def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
@@ -259,14 +260,14 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
         if cand_gpalma and cand_gpalma in df.columns:
             df[f"Rec_da_{e}_gpalma"] = pd.to_numeric(df[cand_gpalma], errors="coerce")
         elif f"Rec_da_{e}_kgha" in df.columns:
-            df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kgha(df[f"Rec_da_{e}_kgha"])
+            df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kgha(df[f"Rec_da_{e}_kgha"], dens_s)
         elif f"Rec_da_{e}_kglote" in df.columns and area_col in df.columns:
             kgha_impl = (pd.to_numeric(df[f"Rec_da_{e}_kglote"], errors="coerce") / area_s) \
                         .replace([np.inf, -np.inf], np.nan)
-            df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kgha(kgha_impl)
+            df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kgha(kgha_impl, dens_s)
 
         if f"Rec_da_{e}_kgha" in df.columns:
-            df[f"Rec_da_{e}_kgpalma"] = kg_a_kg_palma(df[f"Rec_da_{e}_kgha"])
+            df[f"Rec_da_{e}_kgpalma"] = kg_a_kg_palma(df[f"Rec_da_{e}_kgha"], dens_s)
         elif f"Rec_da_{e}_gpalma" in df.columns:
             df[f"Rec_da_{e}_kgpalma"] = pd.to_numeric(df[f"Rec_da_{e}_gpalma"], errors="coerce") / 1000.0
 
@@ -298,8 +299,8 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         df[f"Rec_{key}_kgha"] = pd.to_numeric(df[found], errors="coerce")
-        df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kgha(df[f"Rec_{key}_kgha"])
-        df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"])
+        df[f"Rec_{key}_gpalma"] = _to_g_palma_from_kgha(df[f"Rec_{key}_kgha"], dens_s)
+        df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"], dens_s)
 
         cand_lote_motor = find_col(df.columns, [f"fuente_{key}_kg_lote"])
         if cand_lote_motor:
@@ -331,13 +332,13 @@ def normalize_for_ui(df: pd.DataFrame) -> pd.DataFrame:
     if caldol["gpalma"]:
         df["Rec_caldol_gpalma"] = pd.to_numeric(df[caldol["gpalma"]], errors="coerce")
     elif "Rec_caldol_kgha" in df.columns:
-        df["Rec_caldol_gpalma"] = _to_g_palma_from_kgha(df["Rec_caldol_kgha"])
+        df["Rec_caldol_gpalma"] = _to_g_palma_from_kgha(df["Rec_caldol_kgha"], dens_s)
     elif "Rec_caldol_kglote" in df.columns and area_col in df.columns:
         kgha_impl = (pd.to_numeric(df["Rec_caldol_kglote"], errors="coerce") / area_s) \
                     .replace([np.inf, -np.inf], np.nan)
-        df["Rec_caldol_gpalma"] = _to_g_palma_from_kgha(kgha_impl)
+        df["Rec_caldol_gpalma"] = _to_g_palma_from_kgha(kgha_impl, dens_s)
     if "Rec_caldol_kgha" in df.columns:
-        df["Rec_caldol_kgpalma"] = kg_a_kg_palma(df["Rec_caldol_kgha"])
+        df["Rec_caldol_kgpalma"] = kg_a_kg_palma(df["Rec_caldol_kgha"], dens_s)
     elif "Rec_caldol_gpalma" in df.columns:
         df["Rec_caldol_kgpalma"] = pd.to_numeric(df["Rec_caldol_gpalma"], errors="coerce") / 1000.0
     if "Rec_caldol_kglote" in df.columns:
@@ -442,22 +443,29 @@ def calcular_densidad_real(df, area_col, n_palmas_col):
     return dens.fillna(DENSIDAD_TEORICA_HA).round(2)
 
 
-def kg_a_g_palma(kgha_s):
+def kg_a_g_palma(kgha_s, densidad_s=None):
     s = pd.to_numeric(kgha_s, errors="coerce")
-    return (s * 1000.0 / DENSIDAD_TEORICA_HA).replace([np.inf, -np.inf], np.nan)
+    if densidad_s is None:
+        dens = pd.Series(DENSIDAD_TEORICA_HA, index=s.index)
+    else:
+        dens = pd.to_numeric(densidad_s, errors="coerce").fillna(DENSIDAD_TEORICA_HA)
+    return (s * 1000.0 / dens).replace([np.inf, -np.inf], np.nan)
 
 
-def kg_a_kg_palma(kgha_s):
+def kg_a_kg_palma(kgha_s, densidad_s=None):
     s = pd.to_numeric(kgha_s, errors="coerce")
-    return (s / DENSIDAD_TEORICA_HA).replace([np.inf, -np.inf], np.nan)
+    if densidad_s is None:
+        dens = pd.Series(DENSIDAD_TEORICA_HA, index=s.index)
+    else:
+        dens = pd.to_numeric(densidad_s, errors="coerce").fillna(DENSIDAD_TEORICA_HA)
+    return (s / dens).replace([np.inf, -np.inf], np.nan)
 
 
 def kg_lote_desde_kgha(kgha_s, area_s, densidad_s):
     kgha = pd.to_numeric(kgha_s, errors="coerce")
     area = pd.to_numeric(area_s, errors="coerce")
     dens = pd.to_numeric(densidad_s, errors="coerce").fillna(DENSIDAD_TEORICA_HA)
-    return (kgha * area * (dens / DENSIDAD_TEORICA_HA)).replace([np.inf, -np.inf], np.nan)
-
+    return (kgha * area).replace([np.inf, -np.inf], np.nan)
 
 def _factor_densidad(df, index):
     if "densidad_real" in df.columns:
@@ -875,19 +883,14 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identifica
         rff_real = to_float_safe(row.get(rff_col, np.nan), default=np.nan)
 
     if modo == "agronomo":
-        # 1) Dato real (incluye 0 como producción válida)
         if not pd.isna(rff_real) and rff_real >= 0:
-            if not pd.isna(edad) and edad > 26:
-                return round(min(rff_real, PROD_MAX_MAYOR_26), 3), "dato_real_mayor_26"
             return round(rff_real, 3), "dato_real"
-        # 2) Curva por edad
         if not pd.isna(edad):
             rff_modelado = calcular_produccion_modelada(edad, especie=especie)
             if not pd.isna(rff_modelado) and rff_modelado >= 0:
                 if edad > 26:
                     return rff_modelado, "techo_mayor_26"
                 return rff_modelado, "curva_variedad_edad"
-        # 3) Respaldo
         return PROD_DEFAULT, "respaldo"
 
     # modo == "regresion": la curva por edad manda
@@ -906,17 +909,7 @@ def obtener_rff_calculo(row, rff_col=None, edad_col=None, especie="No_identifica
 
 
 def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
-    """
-    Descompone cada nutriente en su fuente comercial usando la
-    RECOMENDACIÓN FINAL (nec_*). Para N, P, K, Ca, Mg, S y B:
-    nec_* = da_* (eficiencia 1.0, ELEMENTOS_OFICIALES). Si nec_* no
-    existe para un elemento, cae a da_* como respaldo (compatibilidad).
 
-    Reglas de descomposición (tabla de fuentes oficial):
-        Kieserita (Mg, 25 %) aporta S secundario (20 % de su dosis);
-        el Sulfato cubre el saldo de S con su aporte del 20 %:
-        Sulfato = max(0, nec_S − Kieserita × 0.20) / 0.20
-    """
     df = df.copy()
     ha_cols, lote_cols, gpalma_cols = [], [], []
     aporte_secundario_acum = {}
@@ -929,7 +922,6 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
         fuente_nombre = meta["fuente"]
         apor = to_float_safe(meta["aporte"], default=np.nan)
 
-        # ── FIX QA: base = recomendación final (post-eficiencia), no la demanda ajustada ──
         rec_ha_col = f"nec_{elem.lower()}_kg_ha"
         da_ha_col = f"da_{elem.lower()}_kg_ha"
         base_col = rec_ha_col if rec_ha_col in df.columns else da_ha_col
@@ -941,7 +933,6 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
         if elem in aporte_secundario_acum:
             aporte_secundario = aporte_secundario_acum[elem]
             base_efectivo = (df[base_col] - aporte_secundario).clip(lower=0)
-            # ── Trazabilidad QA del sulfato ──
             if elem == "S":
                 df["S_necesidad_final_kg_ha"] = df[base_col].round(6)
                 df["S_aportado_kieserita_kg_ha"] = aporte_secundario.round(6)
@@ -959,12 +950,11 @@ def descomponer_fuentes_kalini(df, area_serie, densidad_serie):
 
         df[ha_c] = (base_efectivo / apor).round(6)
 
-        # ── Trazabilidad QA: dosis final de sulfato ──
         if elem == "S":
             df["Sulfato_calculado_kg_ha"] = df[ha_c]
 
         df[lo_c] = kg_lote_desde_kgha(df[ha_c], area_serie, densidad_serie).round(6)
-        df[gp_c] = kg_a_g_palma(df[ha_c]).round(6)
+        df[gp_c] = kg_a_g_palma(df[ha_c], densidad_serie).round(6)
 
         ha_cols.append(ha_c)
         lote_cols.append(lo_c)
@@ -1048,7 +1038,7 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
             ).round(0)
             n_palmas_col = "n_palmas_inferido"
 
-    rff_res, fuente_res, especie_res, flag_res, prod_obs_res, prod_mod_res = [], [], [], [], [], []
+    rff_res, fuente_res, especie_res, flag_res = [], [], [], []
 
     for _, row in df.iterrows():
         variedad = row.get(variedad_col, "") if variedad_col is not None else ""
@@ -1056,10 +1046,6 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
         flag = get_flag_0g_1h(row, flag_col=flag_col,
                               variedad_col=variedad_col, material_col=material_col)
         especie = determinar_especie(variedad=variedad, material=material, indicador_0g_1h=flag)
-        edad_val = row.get(edad_col, np.nan) if edad_col is not None else np.nan
-        prod_modelada = calcular_produccion_modelada(edad_val, especie=especie)
-        prod_observada = row.get(rff_col, np.nan) if rff_col is not None else np.nan
-        prod_observada = to_float_safe(prod_observada, default=np.nan)
         rff, fuente = obtener_rff_calculo(row, rff_col=rff_col, edad_col=edad_col,
                                           especie=especie, modo=modo_rff)
 
@@ -1067,11 +1053,7 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
         fuente_res.append(fuente)
         especie_res.append(especie)
         flag_res.append(flag)
-        prod_obs_res.append(round(prod_observada, 3) if not pd.isna(prod_observada) else np.nan)
-        prod_mod_res.append(round(prod_modelada, 3) if not pd.isna(prod_modelada) else np.nan)
 
-    df["ton_ha_observada"] = prod_obs_res
-    df["ton_ha_modelada"] = prod_mod_res
     df["rff_calculo"] = rff_res
     df["fuente_rff"] = fuente_res
     df["especie"] = especie_res
@@ -1082,12 +1064,8 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
     else:
         edad_serie = pd.Series(np.nan, index=df.index)
 
-    # ── QA: lotes sin edad se conservan, solo se marcan (no se eliminan) ──
     df["flag_edad_faltante"] = edad_serie.isna().astype(int)
 
-    # La edad se conserva únicamente como atributo de trazabilidad.
-    # No altera el RFF ni la demanda nutricional: el archivo AGROPALMA usa
-    # el `ton/ha` real también para edades <= 3 cuando está disponible.
     df["flag_inmaduro"] = edad_serie.notna() & (edad_serie <= EDAD_INMADURA_MAX)
 
     df = imputar_foliares(df)
@@ -1102,7 +1080,6 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
     df["densidad_real"] = densidad_serie
     df["n_palmas_lote"] = (area_serie * densidad_serie).round(0)
 
-    # ── Motor por elemento (usa fol_pct_ ya imputado y rangos según edad) ──
     for elem in ELEMENTOS_CALCULO:
         fol_res, db_res, da_res, rec_res, fator_res, status_res = [], [], [], [], [], []
 
@@ -1134,14 +1111,15 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
         df[f"fator_{elem.lower()}"] = fator_res
         df[f"status_{elem.lower()}"] = status_res
 
-    # ── Conversiones por lote y por planta (densidad real / teórica 143) ──
+    # ── Conversiones por lote y por planta (kg/lote = kg/ha × área;
+    #    g/palma y kg/palma con densidad real del lote) ──
     for elem in ELEMENTOS_CALCULO:
         nec_ha_col = f"nec_{elem.lower()}_kg_ha"
         if nec_ha_col not in df.columns:
             continue
         df[f"nec_{elem.lower()}_kg_lote"] = kg_lote_desde_kgha(df[nec_ha_col], area_serie, densidad_serie).round(6)
-        df[f"nec_{elem.lower()}_g_palma"] = kg_a_g_palma(df[nec_ha_col]).round(6)
-        df[f"nec_{elem.lower()}_kg_palma"] = kg_a_kg_palma(df[nec_ha_col]).round(6)
+        df[f"nec_{elem.lower()}_g_palma"] = kg_a_g_palma(df[nec_ha_col], densidad_serie).round(6)
+        df[f"nec_{elem.lower()}_kg_palma"] = kg_a_kg_palma(df[nec_ha_col], densidad_serie).round(6)
 
     elementos_descom_ordenados = [e for e in ELEMENTOS_DESCOMPOSICION
                                   if f"da_{e.lower()}_kg_ha" in df.columns]
@@ -1150,8 +1128,8 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
     for elem in elementos_descom_ordenados:
         da_ha_col = f"da_{elem.lower()}_kg_ha"
         df[f"da_{elem.lower()}_kg_lote"] = kg_lote_desde_kgha(df[da_ha_col], area_serie, densidad_serie).round(6)
-        df[f"da_{elem.lower()}_g_palma"] = kg_a_g_palma(df[da_ha_col]).round(6)
-        df[f"da_{elem.lower()}_kg_palma"] = kg_a_kg_palma(df[da_ha_col]).round(6)
+        df[f"da_{elem.lower()}_g_palma"] = kg_a_g_palma(df[da_ha_col], densidad_serie).round(6)
+        df[f"da_{elem.lower()}_kg_palma"] = kg_a_kg_palma(df[da_ha_col], densidad_serie).round(6)
         g_palma_cols.append(f"da_{elem.lower()}_g_palma")
         kg_palma_cols.append(f"da_{elem.lower()}_kg_palma")
 
@@ -1162,7 +1140,6 @@ def calculadora_fert(df: pd.DataFrame, modo_rff: str = "agronomo") -> pd.DataFra
         df["total_g_palma"] = np.nan
         df["total_kg_palma"] = np.nan
 
-    # ── Trazabilidad QA: DA de S (nec_S = da_S, sin eficiencia adicional) ──
     if "da_s_kg_ha" in df.columns:
         df["da_S_preEficiencia_kg_ha"] = df["da_s_kg_ha"]
 
@@ -1187,7 +1164,7 @@ def kpi_card(col, label, value, sub="", icon="", color="#1b60a7"):
 
 def seccion_kpis(df: pd.DataFrame):
     edad_col  = find_col(df.columns, ["edad", "age"])
-    rff_col   = find_col(df.columns, ["rff_calculo", "ton_ha_modelada", "ton_ha", "rff"])
+    rff_col   = find_col(df.columns, ["rff_calculo", "ton_ha", "rff"])
     finca_col = find_col(df.columns, ["finca"])
     lote_col  = find_col(df.columns, ["lote"])
 
@@ -1197,6 +1174,7 @@ def seccion_kpis(df: pd.DataFrame):
     kpi_card(cols[2], "Lotes",       str(df[lote_col].nunique())  if lote_col  else "—",       icon="🌿")
     kpi_card(cols[3], "Edad media",  f"{df[edad_col].mean():.1f} años" if edad_col else "—",   icon="📅")
     kpi_card(cols[4], "RFF medio",   f"{df[rff_col].mean():.2f} t/ha" if rff_col else "—",    icon="📊", color="#1A6B3C")
+
 
 def tab_info():
     st.markdown(
@@ -1891,9 +1869,13 @@ def _n_palmas_constante(index) -> "pd.Series":
     return pd.Series(DENSIDAD_PALMAS_HA, index=index, dtype=float)
 
 
-def _to_g_palma_from_kgha(kgha_s, densidad: float = DENSIDAD_PALMAS_HA) -> "pd.Series":
+def _to_g_palma_from_kgha(kgha_s, densidad=DENSIDAD_PALMAS_HA):
     kgha_s = pd.to_numeric(kgha_s, errors="coerce")
-    return (kgha_s * 1000.0 / densidad).replace([np.inf, -np.inf], np.nan)
+    if isinstance(densidad, (int, float)):
+        dens = pd.Series(float(densidad), index=kgha_s.index)
+    else:
+        dens = pd.to_numeric(densidad, errors="coerce").fillna(DENSIDAD_TEORICA_HA)
+    return (kgha_s * 1000.0 / dens).replace([np.inf, -np.inf], np.nan)
 
 
 def _find_caldol_columns(df_cols):
@@ -2008,6 +1990,7 @@ COLUMNAS_REC_ORDEN = [
     "Rec_caldol_kgpalma", "Rec_caldol_tonlote",
 ]
 
+
 def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
     df = df.copy()
@@ -2051,12 +2034,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         if cand_gpalma:
             df[f"Rec_da_{e}_gpalma"] = df[cand_gpalma].apply(lambda x: to_float_safe(x, np.nan))
         elif cand_ha:
-            df[f"Rec_da_{e}_gpalma"] = kg_a_g_palma(df[f"Rec_da_{e}_kgha"])
+            df[f"Rec_da_{e}_gpalma"] = kg_a_g_palma(df[f"Rec_da_{e}_kgha"], dens_s)
         elif f"Rec_da_{e}_kglote" in df.columns and n_palmas_col in df.columns:
             df[f"Rec_da_{e}_gpalma"] = _to_g_palma_from_kg_lote(df[f"Rec_da_{e}_kglote"], n_palmas_s)
 
         if f"Rec_da_{e}_kgha" in df.columns:
-            df[f"Rec_da_{e}_kgpalma"] = kg_a_kg_palma(df[f"Rec_da_{e}_kgha"])
+            df[f"Rec_da_{e}_kgpalma"] = kg_a_kg_palma(df[f"Rec_da_{e}_kgha"], dens_s)
         elif f"Rec_da_{e}_gpalma" in df.columns:
             df[f"Rec_da_{e}_kgpalma"] = pd.to_numeric(df[f"Rec_da_{e}_gpalma"], errors="coerce") / 1000.0
 
@@ -2084,8 +2067,8 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             continue
 
         df[f"Rec_{key}_kgha"] = df[found].apply(lambda x: to_float_safe(x, np.nan))
-        df[f"Rec_{key}_gpalma"] = kg_a_g_palma(df[f"Rec_{key}_kgha"])
-        df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"])
+        df[f"Rec_{key}_gpalma"] = kg_a_g_palma(df[f"Rec_{key}_kgha"], dens_s)
+        df[f"Rec_{key}_kgpalma"] = kg_a_kg_palma(df[f"Rec_{key}_kgha"], dens_s)
 
         cand_lote_motor = find_col(df.columns, [f"fuente_{key}_kg_lote"])
         if cand_lote_motor:
@@ -2127,12 +2110,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     if caldol["gpalma"]:
         df["Rec_caldol_gpalma"] = df[caldol["gpalma"]].apply(lambda x: to_float_safe(x, np.nan))
     elif "Rec_caldol_kgha" in df.columns:
-        df["Rec_caldol_gpalma"] = kg_a_g_palma(df["Rec_caldol_kgha"])
+        df["Rec_caldol_gpalma"] = kg_a_g_palma(df["Rec_caldol_kgha"], dens_s)
     elif "Rec_caldol_kglote" in df.columns and n_palmas_col in df.columns:
         df["Rec_caldol_gpalma"] = _to_g_palma_from_kg_lote(df["Rec_caldol_kglote"], n_palmas_s)
 
     if "Rec_caldol_kgha" in df.columns:
-        df["Rec_caldol_kgpalma"] = kg_a_kg_palma(df["Rec_caldol_kgha"])
+        df["Rec_caldol_kgpalma"] = kg_a_kg_palma(df["Rec_caldol_kgha"], dens_s)
     elif "Rec_caldol_gpalma" in df.columns:
         df["Rec_caldol_kgpalma"] = pd.to_numeric(df["Rec_caldol_gpalma"], errors="coerce") / 1000.0
 
@@ -2163,10 +2146,9 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
                           "material", "variedad", "manejo", area_col, n_palmas_col]
     id_cols = [c for c in id_cols_candidates if c and c in df.columns]
 
-    prod_cols = [c for c in ["ton_ha_observada", "ton_ha_modelada", "rff_calculo",
-                             "fuente_rff", "especie", "flag_0g_1h", "flag_inferido",
-                             "flag_inmaduro", "flag_edad_faltante", "densidad_real",
-                             "n_palmas_lote", "Foliar"]
+    prod_cols = [c for c in ["rff_calculo", "fuente_rff", "especie", "flag_0g_1h",
+                             "flag_inferido", "flag_inmaduro", "flag_edad_faltante",
+                             "densidad_real", "n_palmas_lote", "Foliar"]
                  if c in df.columns]
 
     rec_orden_existentes = [c for c in COLUMNAS_REC_ORDEN if c in df.columns]
