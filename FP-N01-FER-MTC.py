@@ -1312,59 +1312,6 @@ def tab_info():
             r"\% e = \frac{DA_e}{\text{Total}} \times 100"
         )
 
-    with col_rules:
-        st.markdown("#### Reglas de decisión")
-
-        st.markdown(
-            """
-            <div style="background: #F0F7FF; border-left: 4px solid #1b60a7;
-                        padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 0.65rem;">
-                <b>Foliar bajo</b><br>
-                <span style="font-size: 0.85rem;">
-                Se adiciona una corrección proporcional al déficit foliar.
-                </span>
-            </div>
-            <div style="background: #F2FBF3; border-left: 4px solid #2ca02c;
-                        padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 0.65rem;">
-                <b>Foliar óptimo</b><br>
-                <span style="font-size: 0.85rem;">
-                La demanda ajustada conserva la demanda bruta.
-                </span>
-            </div>
-            <div style="background: #FFF8E7; border-left: 4px solid #f39c12;
-                        padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 0.65rem;">
-                <b>Foliar alto</b><br>
-                <span style="font-size: 0.85rem;">
-                La demanda bruta se reduce al 50&nbsp;%.
-                </span>
-            </div>
-            <div style="background: #F8F1FC; border-left: 4px solid #8e44ad;
-                        padding: 0.8rem 1rem; border-radius: 6px;">
-                <b>Modelo de  </b><br>
-                <span style="font-size: 0.85rem;">
-                Una fuente por nutriente. La cal dolomita se excluye del total
-                del compuesto (es enmienda).
-                </span>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    st.markdown(
-        """
-        <div style="background: #FAFAFA; border: 1px solid #DDE3E8;
-                    padding: 0.9rem 1rem; border-radius: 8px;
-                    font-size: 0.88rem; color: #52616B;">
-            <b>Flujo de unidades:</b>
-            análisis foliar original → porcentaje foliar comparable →
-            demanda bruta en kg/ha → demanda ajustada en kg/ha →
-            recomendación final según eficiencia →
-            <b>dosis de producto por fuente</b> en kg/ha, kg/lote y g/palma.
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
     st.markdown(
         '<div class="section-title">Modelo — Fuentes y aportes</div>',
         unsafe_allow_html=True
@@ -1581,7 +1528,7 @@ def tab_resumen(df: pd.DataFrame):
 
                 modo_edad = st.radio(
                     "Agrupar la edad por:",
-                    options=["Franja etaria", "Edad exacta"],
+                    options=["Franja de edad", "Edad exacta"],
                     horizontal=True,
                     key="res_form_edad_modo",
                 )
@@ -1593,7 +1540,7 @@ def tab_resumen(df: pd.DataFrame):
                 if base.empty:
                     st.info("No hay fórmulas compuestas calculadas para agrupar por edad.")
                 else:
-                    if modo_edad == "Franja etaria":
+                    if modo_edad == "Franja de edad":
                         col_edad = "Franja de edad"
                         base[col_edad] = base[edad_col_f].apply(franja_edad)
                         orden_cat = pd.CategoricalDtype(FRANJAS_EDAD, ordered=True)
