@@ -85,7 +85,7 @@ st.markdown("""
 FOLIAR_RANGES = {
     "N":  {"min": 2.50,   "max": 2.80,   "unidad": "g/kg"},   # 2,50–2,80 %
     "P":  {"min": 0.16,   "max": 0.19,   "unidad": "g/kg"},   # 0,16–0,19 %
-    "K":  {"min": 1.25,   "max": 1.45,   "unidad": "g/kg"},   # 1,25–1,45 %
+    "K":  {"min": 1.25,   "max": 1.45,   "unidad": "g/kg "},   # 1,25–1,45 %
     "Ca": {"min": 0.55,   "max": 0.75,   "unidad": "g/kg"},   # 0,55–0,75 %
     "Mg": {"min": 0.25,   "max": 0.40,   "unidad": "g/kg"},   # 0,25–0,40 %
     "S":  {"min": 0.20,   "max": 0.25,   "unidad": "g/kg"},   # 0,20–0,25 %
@@ -1203,7 +1203,9 @@ def tab_info():
                 La calculadora estima la necesidad de cada nutriente a partir del
                 rendimiento, el material genético y el estado foliar, y la convierte
                 en dosis de producto físico (fuentes comerciales) usando el modelo
-                de Kalini: una fuente por nutriente.
+                de Kalini: una fuente por nutriente. La pestaña <b>Presupuesto</b> es
+                una capa posterior al motor: permite usar fuentes comerciales
+                alternativas y ajustar dosis (% o g/palma) sin modificar las ecuaciones.
             </div>
         </div>
         """,
@@ -1276,6 +1278,24 @@ def tab_info():
         unsafe_allow_html=True
     )
 
+    st.markdown(
+        """
+        <div style="background: #F0F7FF; border-left: 4px solid #8e44ad;
+                    padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 0.65rem;">
+            <b>🧾 Capa de Presupuesto (opcional)</b><br>
+            <span style="font-size: 0.85rem;">
+            En la pestaña <b>Presupuesto</b> puedes elegir qué fuente comercial cubre
+            cada nutriente (con reconocimiento de aportes secundarios), ajustar la
+            recomendación por porcentaje o con dosis manuales en g/palma, y aplicar el
+            plan a fincas, departamentos, franjas de edad o lotes seleccionados, con
+            recálculo automático de dosis, totales y fórmula compuesta. El motor y sus
+            ecuaciones nunca se modifican.
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
     col_formula, col_rules = st.columns([1.15, 1])
 
     with col_formula:
@@ -1312,6 +1332,11 @@ def tab_info():
             r"\% e = \frac{DA_e}{\text{Total}} \times 100"
         )
 
+        st.markdown("**Ajuste de plan (Presupuesto)**")
+        st.latex(
+            r"\text{Nec}_e^{\text{plan}} = \text{Nec}_e \times \left(1 + \frac{\%\,e}{100}\right)"
+        )
+
     st.markdown(
         '<div class="section-title">Modelo — Fuentes y aportes</div>',
         unsafe_allow_html=True
@@ -1332,46 +1357,6 @@ def tab_info():
         use_container_width=True,
         hide_index=True,
     )
-
-    st.markdown(
-        '<div class="section-title">Parámetros de referencia — Motor de cálculo</div>',
-        unsafe_allow_html=True
-    )
-
-    ref_rows = []
-
-    for elem in ELEMENTOS_CALCULO:
-        r = FOLIAR_RANGES[elem]
-        es_oficial = elem in ELEMENTOS_OFICIALES
-
-        coef_g = DB_COEF_GUINEENSIS.get(elem)
-        coef_h = DB_COEF_HIBRIDO.get(elem)
-
-        if coef_g:
-            ecuacion_g = f"{coef_g[0]}·t/ha {coef_g[1]:+.4f}"
-        else:
-            ecuacion_g = f"EXPORT×{EXPORT_COEF.get(elem, '—')}"
-
-        if coef_h:
-            ecuacion_h = f"{coef_h[0]}·t/ha {coef_h[1]:+.4f}"
-        else:
-            ecuacion_h = "—"
-
-        ref_rows.append({
-            "Nutriente": elem,
-            "Mínimo foliar": r["min"],
-            "Máximo foliar": r["max"],
-            "Unidad": r["unidad"],
-            "Ecuación Guineensis": ecuacion_g,
-            "Ecuación Híbrido": ecuacion_h,
-            "g/planta (Δ)": G_PLANTA.get(elem, "—"),
-            "Delta": DELTA.get(elem, "—"),
-            "Eficiencia": (
-                "1.0 (da = rec)" if es_oficial else f"{EFICIENCIA.get(elem, 1.0)}"
-            ),
-        })
-
-    st.dataframe(pd.DataFrame(ref_rows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
@@ -1957,9 +1942,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         ["n_palmas", "numero_palmas", "palmas", "plantas", "plantas_ha"]
     )
 
-    # Densidad usada en TODAS las conversiones por palma:
-    # columna 'densidad' del Excel, con respaldo 143 si falta.
-    # NO usar densidad_real para dosis por palma.
     dens_s = obtener_densidad_recomendacion(df)
 
     area_s = (
@@ -1968,7 +1950,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         else pd.Series(np.nan, index=df.index)
     )
 
-    # ── Nutrientes ─────────────────────────────────────────────────────────
     for e in ["N", "P", "K", "Ca", "Mg", "B", "S"]:
 
         if e == "S":
@@ -2013,7 +1994,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
                 lambda x: to_float_safe(x, np.nan)
             )
 
-        # kg/lote = kg/ha × área. No depende de densidad.
         if cand_lote:
             df[f"Rec_da_{e}_kglote"] = df[cand_lote].apply(
                 lambda x: to_float_safe(x, np.nan)
@@ -2024,14 +2004,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
                 area_s,
             )
 
-        # g/palma = kg/ha × 1000 / Densidad.
         if f"Rec_da_{e}_kgha" in df.columns:
             df[f"Rec_da_{e}_gpalma"] = kg_a_g_palma(
                 df[f"Rec_da_{e}_kgha"],
                 dens_s,
             )
 
-            # kg/palma = kg/ha / Densidad.
             df[f"Rec_da_{e}_kgpalma"] = kg_a_kg_palma(
                 df[f"Rec_da_{e}_kgha"],
                 dens_s,
@@ -2310,7 +2288,12 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         if c in df.columns
     ]
 
-    final_cols = id_cols + prod_cols + rec_orden_existentes + estado_cols
+    extras_plan = [
+        c for c in st.session_state.get("plan_extra_cols", [])
+        if c in df.columns
+    ]
+
+    final_cols = id_cols + prod_cols + rec_orden_existentes + extras_plan + estado_cols
     final_cols = list(dict.fromkeys(final_cols))
 
     df_resultados = df[final_cols].copy()
@@ -2507,6 +2490,581 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
 
 # ════════════════════════════════════════════════════
+# 6B. PRESUPUESTO — FUENTES PERSONALIZADAS Y AJUSTES
+#     Capa posterior al motor: no modifica las ecuaciones
+#     AGROPALMA; recalcula dosis, totales y fórmula.
+# ════════════════════════════════════════════════════
+
+CATALOGO_FUENTES = {
+    "Urea":              {"N": 0.45},
+    "Sulfato de amonio": {"N": 0.21, "S": 0.24},
+    "Nitrato de amonio": {"N": 0.335},
+    "MAP":               {"N": 0.10, "P": 0.52},
+    "DAP":               {"N": 0.18, "P": 0.46},
+    "SPT":               {"P": 0.46},
+    "KCl":               {"K": 0.60},
+    "Sulfato de potasio": {"K": 0.50, "S": 0.18},
+    "Kieserita":         {"Mg": 0.25, "S": 0.20},
+    "Cal_dolomita":      {"Ca": 0.35},
+    "Granubor":          {"B": 0.15},
+    "Borax":             {"B": 0.11},
+    "Acido borico":      {"B": 0.17},
+    "Sulfato":           {"S": 0.20},
+}
+
+# Selección por defecto = set Kalini del motor (reproduce el comportamiento original)
+KALINI_NOMBRE_POR_ELEM = {
+    "N": "Urea", "P": "SPT", "K": "KCl", "Ca": "Cal_dolomita",
+    "Mg": "Kieserita", "B": "Granubor", "S": "Sulfato",
+}
+
+KALINI_SLOTS = ["urea", "spt", "kcl", "kieserita", "granubor", "sulfato", "cal_dolomita"]
+
+# Orden de descomposición con créditos secundarios (igual que el motor)
+ORDEN_DECOMP_PLAN = ["N", "P", "K", "Ca", "Mg", "B", "S"]
+
+
+def _rec_prefijo_plan(slug: str) -> str:
+    if slug == "spt":
+        return "Rec_SPT"
+    if slug == "cal_dolomita":
+        return "Rec_caldol"
+    return f"Rec_{slug}"
+
+
+def _plan_default() -> dict:
+    return {
+        "activo": False,
+        "seleccion": dict(KALINI_NOMBRE_POR_ELEM),
+        "pct": {e: 0 for e in ELEMENTOS_DESCOMPOSICION},
+        "modo": "porcentaje",
+        "manual": {},
+        "lotes": [],
+        "alcance": "todos",
+        "resumen": "",
+    }
+
+
+def _dosis_plan_core(df: pd.DataFrame, idx, sel: dict):
+    """
+    Descompone las necesidades (nec_*) en las fuentes seleccionadas,
+    con créditos secundarios (mismo criterio del motor: p. ej. la Kieserita
+    aporta Mg y S). Procesa en el orden N→P→K→Ca→Mg→B→S; los créditos solo
+    se descuentan de nutrientes posteriores en ese orden.
+
+    Devuelve (dosis, avisos, creditos):
+        dosis    {slug_fuente: Series kg/ha}
+        avisos   [str]
+        creditos {elemento: Series|float kg/ha aportados por otras fuentes}
+    """
+    creditos, dosis, avisos = {}, {}, []
+    for e in ORDEN_DECOMP_PLAN:
+        fuente = sel.get(e)
+        if not fuente or fuente not in CATALOGO_FUENTES:
+            continue
+        base_col = f"nec_{e.lower()}_kg_ha"
+        if base_col not in df.columns:
+            continue
+        apor = to_float_safe(CATALOGO_FUENTES[fuente].get(e, np.nan), np.nan)
+        if pd.isna(apor) or apor <= 0:
+            avisos.append(f"{fuente} no aporta {e}: el nutriente {e} queda sin fuente.")
+            continue
+        base = (df.loc[idx, base_col].astype(float) - creditos.get(e, 0.0)).clip(lower=0)
+        kgha = base / apor
+        slug = normalize_col(fuente)
+        if slug in dosis:
+            dosis[slug] = pd.concat([dosis[slug], kgha], axis=1).max(axis=1)
+        else:
+            dosis[slug] = kgha
+        for e2, f2 in CATALOGO_FUENTES[fuente].items():
+            if e2 == e:
+                continue
+            f2 = to_float_safe(f2, 0.0)
+            if f2 > 0:
+                creditos[e2] = creditos.get(e2, 0.0) + kgha * f2
+    return dosis, avisos, creditos
+
+
+def aplicar_plan_presupuesto(df: pd.DataFrame, plan: dict):
+    """
+    Aplica el plan de presupuesto (fuentes seleccionadas + ajustes de dosis)
+    sobre los lotes objetivo del DataFrame ya filtrado.
+
+    Recalcula, para los lotes del plan:
+      1. necesidades ajustadas por % (nec_/da_ y todas sus unidades);
+      2. dosis por fuente (créditos secundarios incluidos) en kg/ha,
+         kg/lote, g/palma y kg/palma;
+      3. totales de fuentes y fórmula compuesta;
+      4. columnas de auditoría (Plan_Fuente, Plan_Ajuste).
+
+    Devuelve (df, n_lotes_afectados, avisos).
+    """
+    if not plan or not plan.get("activo"):
+        return df, 0, []
+
+    df = df.copy()
+
+    lote_col = find_col(df.columns, ["lote", "block", "bloque", "cod_lote", "id_lote", "lote_id"])
+    alcance = plan.get("alcance", "todos")
+    lotes_obj = [str(x) for x in (plan.get("lotes") or [])]
+    if alcance != "todos" and lote_col:
+        if lotes_obj:
+            mascara = df[lote_col].astype(str).isin(lotes_obj)
+        else:
+            mascara = pd.Series(False, index=df.index)
+    else:
+        mascara = pd.Series(True, index=df.index)
+    if not mascara.any():
+        return df, 0, ["Ninguno de los lotes del plan está dentro del filtro actual."]
+
+    idx = df.index[mascara]
+
+    area_col = find_col(df.columns, ["area", "ha", "hectareas", "superficie"])
+    if area_col:
+        area_s = df[area_col].apply(lambda x: to_float_safe(x, np.nan))
+    else:
+        area_s = pd.Series(np.nan, index=df.index, dtype="float64")
+    area_s = area_s.replace([np.inf, -np.inf, 0], np.nan)
+
+    dens_s = obtener_densidad_recomendacion(df)
+
+    sel = plan.get("seleccion") or {}
+    modo = plan.get("modo", "porcentaje")
+    pcts = plan.get("pct") or {}
+    manual = plan.get("manual") or {}
+    avisos = []
+
+    # ── 1) Ajuste por % sobre las necesidades del motor ──
+    ajuste_txt = []
+    if modo == "porcentaje":
+        for e in ELEMENTOS_DESCOMPOSICION:
+            pct = to_float_safe(pcts.get(e, 0), 0.0)
+            if pct == 0:
+                continue
+            ajuste_txt.append(f"{e} {pct:+.0f}%")
+            nec_col = f"nec_{e.lower()}_kg_ha"
+            da_col = f"da_{e.lower()}_kg_ha"
+            base_col = nec_col if nec_col in df.columns else da_col
+            if base_col not in df.columns:
+                continue
+            ajust = (df.loc[idx, base_col].astype(float) * (1.0 + pct / 100.0)).clip(lower=0)
+
+            for c in {nec_col, da_col}:
+                if c in df.columns:
+                    df.loc[idx, c] = ajust.round(6)
+
+            kg_lote = kg_lote_desde_kgha(ajust, area_s.loc[idx], dens_s.loc[idx])
+            g_palma = kg_a_g_palma(ajust, dens_s.loc[idx])
+            kg_palma = kg_a_kg_palma(ajust, dens_s.loc[idx])
+            for prefijo in ["da", "nec"]:
+                for suf, val in [("kg_lote", kg_lote), ("g_palma", g_palma), ("kg_palma", kg_palma)]:
+                    c = f"{prefijo}_{e.lower()}_{suf}"
+                    if c in df.columns:
+                        df.loc[idx, c] = val.round(6)
+            df.loc[idx, f"Rec_da_{e}_kgha"] = ajust.round(6)
+            df.loc[idx, f"Rec_da_{e}_kglote"] = kg_lote.round(6)
+            df.loc[idx, f"Rec_da_{e}_gpalma"] = g_palma.round(6)
+            df.loc[idx, f"Rec_da_{e}_kgpalma"] = kg_palma.round(6)
+
+        gpal_n = [c for c in df.columns if c.startswith("Rec_da_") and c.endswith("_gpalma")]
+        if gpal_n:
+            df.loc[idx, "Rec_total_n_gpalma"] = df.loc[idx, gpal_n].sum(axis=1, min_count=1).round(6)
+            df.loc[idx, "Rec_total_n_kgpalma"] = (
+                df.loc[idx, "Rec_total_n_gpalma"].astype(float) / 1000.0
+            ).round(6)
+
+    # ── 2) Descomposición en las fuentes seleccionadas ──
+    dosis, avisos_core, creditos = _dosis_plan_core(df, idx, sel)
+    avisos.extend(avisos_core)
+
+    # Transparencia del S (misma trazabilidad que el motor)
+    if "nec_s_kg_ha" in df.columns:
+        cred_s = creditos.get("S", 0.0)
+        df.loc[idx, "S_necesidad_final_kg_ha"] = df.loc[idx, "nec_s_kg_ha"].astype(float).round(6)
+        if isinstance(cred_s, pd.Series):
+            df.loc[idx, "S_aportado_kieserita_kg_ha"] = cred_s.round(6)
+        else:
+            df.loc[idx, "S_aportado_kieserita_kg_ha"] = round(float(cred_s), 6)
+        df.loc[idx, "S_saldo_para_sulfato_kg_ha"] = (
+            df.loc[idx, "S_necesidad_final_kg_ha"].astype(float) - cred_s
+        ).clip(lower=0).round(6)
+
+    # ── 3) Modo manual: dosis fijas por fuente (g/palma) ──
+    if modo == "manual" and manual:
+        ajuste_txt.append("dosis manual g/palma")
+        for slug, g in manual.items():
+            g = to_float_safe(g, np.nan)
+            if pd.isna(g) or g < 0 or slug not in dosis:
+                continue
+            dosis[slug] = (g * dens_s.loc[idx] / 1000.0).clip(lower=0)
+
+    # ── 4) Escritura de dosis por fuente ──
+    for key in KALINI_SLOTS:
+        if key in dosis:
+            continue
+        limpiar = [f"fuente_{key}_kg_ha", f"fuente_{key}_kg_lote", f"fuente_{key}_g_palma",
+                   f"{_rec_prefijo_plan(key)}_kgha", f"{_rec_prefijo_plan(key)}_kglote",
+                   f"{_rec_prefijo_plan(key)}_gpalma", f"{_rec_prefijo_plan(key)}_kgpalma"]
+        if key == "sulfato":
+            limpiar.append("Sulfato_calculado_kg_ha")
+        for c in limpiar:
+            if c in df.columns:
+                df.loc[idx, c] = np.nan
+
+    extras_plan = []
+    for slug, kgha in dosis.items():
+        kgha = kgha.clip(lower=0)
+        c_ha = f"fuente_{slug}_kg_ha"
+        c_lo = f"fuente_{slug}_kg_lote"
+        c_gp = f"fuente_{slug}_g_palma"
+        df.loc[idx, c_ha] = kgha.round(6)
+        df.loc[idx, c_lo] = kg_lote_desde_kgha(kgha, area_s.loc[idx], dens_s.loc[idx]).round(6)
+        df.loc[idx, c_gp] = kg_a_g_palma(kgha, dens_s.loc[idx]).round(6)
+
+        pref = _rec_prefijo_plan(slug)
+        df.loc[idx, f"{pref}_kgha"] = df.loc[idx, c_ha]
+        df.loc[idx, f"{pref}_kglote"] = df.loc[idx, c_lo]
+        df.loc[idx, f"{pref}_gpalma"] = df.loc[idx, c_gp]
+        df.loc[idx, f"{pref}_kgpalma"] = kg_a_kg_palma(kgha, dens_s.loc[idx]).round(6)
+        if slug == "cal_dolomita":
+            df.loc[idx, "Rec_caldol_tonlote"] = (df.loc[idx, c_lo].astype(float) / 1000.0).round(6)
+        extras_plan.extend([c_ha, c_lo, c_gp,
+                            f"{pref}_kgha", f"{pref}_kglote", f"{pref}_gpalma", f"{pref}_kgpalma"])
+
+    # ── 5) Totales y fórmula compuesta ──
+    slugs_comp = [s for s in dosis if s not in FUENTES_EXCLUIDAS_FORMULA]
+    gp_cols = [f"fuente_{s}_g_palma" for s in dosis]
+    if gp_cols:
+        df.loc[idx, "total_fuentes_g_palma"] = df.loc[idx, gp_cols].sum(axis=1, min_count=1).round(6)
+        df.loc[idx, "total_fuentes_kg_palma"] = (
+            df.loc[idx, "total_fuentes_g_palma"].astype(float) / 1000.0
+        ).round(6)
+        if slugs_comp:
+            df.loc[idx, "Rec_total_f_gpalma"] = (
+                df.loc[idx, [f"fuente_{s}_g_palma" for s in slugs_comp]]
+                .sum(axis=1, min_count=1).round(6)
+            )
+            df.loc[idx, "Rec_total_f_kgpalma"] = (
+                df.loc[idx, "Rec_total_f_gpalma"].astype(float) / 1000.0
+            ).round(6)
+        else:
+            df.loc[idx, "Rec_total_f_gpalma"] = np.nan
+            df.loc[idx, "Rec_total_f_kgpalma"] = np.nan
+
+    if slugs_comp:
+        ha_cols = [f"fuente_{s}_kg_ha" for s in slugs_comp]
+        lo_cols = [f"fuente_{s}_kg_lote" for s in slugs_comp]
+        df.loc[idx, "total_compuesto_kg_ha"] = df.loc[idx, ha_cols].sum(axis=1, min_count=1).round(6)
+        df.loc[idx, "total_compuesto_kg_lote"] = df.loc[idx, lo_cols].sum(axis=1, min_count=1).round(6)
+
+        def _formula_row(r):
+            tot = r.get("total_compuesto_kg_ha", np.nan)
+            if pd.isna(tot) or tot <= 0:
+                return np.nan
+
+            def pct(e, dec=0):
+                v = r.get(f"nec_{e.lower()}_kg_ha", np.nan)
+                if pd.isna(v):
+                    v = r.get(f"da_{e.lower()}_kg_ha", np.nan)
+                if pd.isna(v):
+                    return 0
+                return round(v / tot * 100, dec)
+
+            return (f"{pct('N')}-{pct('P')}-{pct('K')}-{pct('Mg')} MgO-"
+                    f"{pct('S')} S-{pct('B', 2)} B")
+
+        df.loc[idx, "Formula (N-P-K-MgO-B)"] = df.loc[idx].apply(_formula_row, axis=1)
+
+    # ── 6) Auditoría y columnas extra para el export ──
+    fuentes_motor = all(
+        (sel.get(e) == KALINI_NOMBRE_POR_ELEM.get(e)) for e in KALINI_NOMBRE_POR_ELEM
+    )
+    df.loc[idx, "Plan_Fuente"] = "Kalini (motor)" if fuentes_motor else "Personalizado"
+    df.loc[idx, "Plan_Ajuste"] = ("; ".join(ajuste_txt) if ajuste_txt else "sin ajuste")
+    extras_plan += ["Plan_Fuente", "Plan_Ajuste"]
+
+    prev = st.session_state.get("plan_extra_cols", [])
+    st.session_state["plan_extra_cols"] = list(
+        dict.fromkeys(prev + [c for c in extras_plan if c in df.columns])
+    )
+
+    return df, int(mascara.sum()), avisos
+
+
+def tab_presupuesto(df: pd.DataFrame):
+    """
+    Presupuesto: selección de fuentes comerciales por nutriente, ajuste de la
+    recomendación (% o g/palma) y aplicación a un grupo de lotes con recálculo.
+    """
+    st.markdown(
+        '<div class="section-title">Presupuesto — Fuentes comerciales y ajuste de dosis</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Elige qué fuente comercial cubre cada nutriente, ajusta la recomendación "
+        "(% o g/palma) y aplica el plan a un grupo de lotes. El plan es una capa "
+        "posterior al motor AGROPALMA: recalcula dosis por fuente, totales y fórmula "
+        "sin modificar las ecuaciones de demanda. Respeta los filtros de la barra lateral."
+    )
+
+    plan = st.session_state.get("plan_fer") or _plan_default()
+
+    if plan.get("activo"):
+        sel_txt = ", ".join(
+            f"{e}→{(plan.get('seleccion') or {}).get(e, '—')}" for e in ELEMENTOS_DESCOMPOSICION
+        )
+        st.success(
+            f"✅ **Plan activo** ({plan.get('resumen') or 'alcance: todos'}) — "
+            f"**{st.session_state.get('plan_n_lotes', 0)} lotes recalculados**. "
+            f"Fuentes: {sel_txt} · Ajuste: {plan.get('modo', 'porcentaje')}"
+        )
+        for a in st.session_state.get("plan_avisos", []) or []:
+            st.warning(f"⚠️ {a}")
+    else:
+        st.info("Sin plan activo: las dosis mostradas en todas las pestañas provienen del motor Kalini.")
+
+    lote_col = find_col(df.columns, ["lote", "block", "bloque", "cod_lote", "id_lote"])
+    finca_col = find_col(df.columns, ["finca"])
+    dep_col = find_col(df.columns, ["departamento", "depto", "zona", "region"])
+    edad_col = find_col(df.columns, ["edad", "age"])
+    area_col = find_col(df.columns, ["area", "ha", "hectareas", "superficie"])
+
+    # ── Paso 1 · Fuentes ────────────────────────────────────────────────────
+    with st.expander("1 · Selección de fuentes comerciales por nutriente", expanded=True):
+        elecciones = {}
+        cols = st.columns(4)
+        opciones = list(CATALOGO_FUENTES) + ["(sin fuente)"]
+        for i, e in enumerate(ELEMENTOS_DESCOMPOSICION):
+            actual = (plan.get("seleccion") or {}).get(e, KALINI_NOMBRE_POR_ELEM[e])
+            index0 = opciones.index(actual) if actual in opciones else opciones.index(KALINI_NOMBRE_POR_ELEM[e])
+            with cols[i % 4]:
+                elecciones[e] = st.selectbox(
+                    f"**{e}**", opciones, index=index0, key=f"plan_src_{e}",
+                    help="Fuente comercial que cubre el nutriente. "
+                         "La selección por defecto reproduce el set Kalini del motor.",
+                )
+        filas_sel = []
+        for e in ELEMENTOS_DESCOMPOSICION:
+            f = elecciones[e]
+            comp = CATALOGO_FUENTES.get(f, {})
+            filas_sel.append({
+                "Nutriente": e,
+                "Fuente": f.replace("_", " ") if f != "(sin fuente)" else "—",
+                "Aporte primario": f"{comp.get(e, 0) * 100:.0f} %",
+                "Aportes secundarios": ", ".join(
+                    f"{k} {v * 100:.0f}%" for k, v in comp.items() if k != e
+                ) or "—",
+                "En fórmula compuesta": "No (enmienda)"
+                    if normalize_col(f) in FUENTES_EXCLUIDAS_FORMULA else "Sí",
+            })
+        st.dataframe(pd.DataFrame(filas_sel), use_container_width=True, hide_index=True)
+        st.caption(
+            "Los créditos secundarios (p. ej. el S de la Kieserita) se descuentan de los "
+            "nutrientes procesados después en el orden N→P→K→Ca→Mg→B→S, igual que en el motor. "
+            "Si una fuente cubre dos nutrientes elegidos, se usa la dosis mayor de las dos."
+        )
+
+    # ── Paso 2 · Ajuste ─────────────────────────────────────────────────────
+    with st.expander("2 · Ajuste de la recomendación", expanded=True):
+        pcts_efec = {e: 0 for e in ELEMENTOS_DESCOMPOSICION}
+        manual_dict = {}
+
+        modo = st.radio(
+            "Modo de ajuste:",
+            ["Porcentaje (%)", "Manual (g/palma por fuente)"],
+            index=0 if plan.get("modo", "porcentaje") == "porcentaje" else 1,
+            horizontal=True,
+            key="plan_modo",
+            help=(
+                "Porcentaje: multiplica la necesidad (nec_*) de cada nutriente. "
+                "Manual: fija la dosis de cada fuente en g/palma (equivalente en kg/palma); "
+                "kg/ha y kg/lote se recalculan con la densidad y el área reales de cada lote."
+            ),
+        )
+
+        if modo == "Porcentaje (%)":
+            pct_glob = st.slider("Ajuste global (%):", -100, 200, 0, key="plan_pct_global")
+            st.markdown("**Ajuste específico por nutriente (%)**")
+            pcols = st.columns(4)
+            for i, e in enumerate(ELEMENTOS_DESCOMPOSICION):
+                with pcols[i % 4]:
+                    base_pct = int(to_float_safe((plan.get("pct") or {}).get(e, 0), 0))
+                    pcts_efec[e] = st.slider(f"{e} (%):", -100, 200, base_pct, key=f"plan_pct_{e}")
+            pcts_efec = {e: max(-100, min(200, pct_glob + v)) for e, v in pcts_efec.items()}
+            if pct_glob != 0 or any(v != 0 for v in pcts_efec.values()):
+                st.dataframe(
+                    pd.DataFrame([
+                        {"Nutriente": e, "Ajuste efectivo": f"{v:+d} %"}
+                        for e, v in pcts_efec.items()
+                    ]),
+                    use_container_width=True, hide_index=True,
+                )
+        else:
+            st.caption(
+                "Dosis por fuente en g/palma (se inicializan con el motor). "
+                "kg/ha y kg/lote se recalculan al aplicar el plan."
+            )
+            dosis_def, _, _ = _dosis_plan_core(df, df.index, elecciones)
+            if not dosis_def:
+                st.info("Selecciona al menos una fuente en el paso 1.")
+            dens_media = to_float_safe(obtener_densidad_recomendacion(df).mean(), DENSIDAD_TEORICA_HA)
+            mcols = st.columns(3)
+            for i, (slug, kgha) in enumerate(dosis_def.items()):
+                g_def = float(pd.to_numeric(kgha, errors="coerce").mean() * dens_media / 1000.0)
+                g_def = 0.0 if pd.isna(g_def) else round(g_def, 1)
+                with mcols[i % 3]:
+                    g = st.number_input(
+                        f"{slug.replace('_', ' ')} (g/palma):",
+                        min_value=0.0, step=1.0, value=g_def, key=f"plan_man_{slug}",
+                    )
+                    manual_dict[slug] = float(g)
+                    st.caption(f"≈ {g * dens_media / 1000.0:.2f} kg/ha · {g / 1000.0:.4f} kg/palma")
+
+    # ── Paso 3 · Alcance ────────────────────────────────────────────────────
+    with st.expander("3 · Alcance — lotes a los que aplica el plan", expanded=True):
+        tipo_alcance = st.radio(
+            "Aplicar el plan a:",
+            ["Todos los lotes del filtro actual", "Por finca", "Por departamento",
+             "Por franja de edad", "Selección manual de lotes"],
+            index=0,
+            horizontal=True,
+            key="plan_alcance_tipo",
+        )
+        lotes_objetivo = []
+        if tipo_alcance == "Por finca" and finca_col:
+            sel_f = st.multiselect(
+                "Fincas:", sorted(df[finca_col].dropna().astype(str).unique().tolist()),
+                key="plan_alc_finca",
+            )
+            lotes_objetivo = (
+                df.loc[df[finca_col].astype(str).isin(sel_f), lote_col].astype(str).tolist()
+                if (lote_col and sel_f) else []
+            )
+        elif tipo_alcance == "Por departamento" and dep_col:
+            sel_d = st.multiselect(
+                "Departamentos:", sorted(df[dep_col].dropna().astype(str).unique().tolist()),
+                key="plan_alc_dep",
+            )
+            lotes_objetivo = (
+                df.loc[df[dep_col].astype(str).isin(sel_d), lote_col].astype(str).tolist()
+                if (lote_col and sel_d) else []
+            )
+        elif tipo_alcance == "Por franja de edad" and edad_col:
+            sel_fr = st.multiselect("Franjas de edad:", FRANJAS_EDAD, key="plan_alc_franja")
+            mask_fr = df[edad_col].apply(franja_edad).astype(str).isin(sel_fr)
+            lotes_objetivo = (
+                df.loc[mask_fr, lote_col].astype(str).tolist()
+                if (lote_col and sel_fr) else []
+            )
+        elif tipo_alcance == "Selección manual de lotes" and lote_col:
+            lotes_objetivo = st.multiselect(
+                "Lotes:", sorted(df[lote_col].dropna().astype(str).unique().tolist()),
+                key="plan_alc_lotes",
+            )
+        if tipo_alcance.startswith("Todos"):
+            st.caption(f"Lotes objetivo: **{len(df)}** (todos los del filtro actual).")
+        else:
+            st.caption(f"Lotes objetivo: **{len(lotes_objetivo)}**.")
+
+    cbtn1, cbtn2, _ = st.columns([1.4, 1.4, 2])
+    if cbtn1.button("🔄 Aplicar plan y recalcular", type="primary", key="plan_btn_aplicar"):
+        st.session_state["plan_fer"] = {
+            "activo": True,
+            "seleccion": dict(elecciones),
+            "modo": "porcentaje" if modo == "Porcentaje (%)" else "manual",
+            "pct": dict(pcts_efec) if modo == "Porcentaje (%)" else {},
+            "manual": dict(manual_dict) if modo != "Porcentaje (%)" else {},
+            "lotes": [str(x) for x in lotes_objetivo],
+            "alcance": "todos" if tipo_alcance.startswith("Todos") else "seleccion",
+            "resumen": tipo_alcance,
+        }
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
+    if cbtn2.button("↩️ Restaurar motor original", key="plan_btn_reset"):
+        st.session_state["plan_fer"] = _plan_default()
+        st.session_state["plan_extra_cols"] = []
+        st.session_state["plan_avisos"] = []
+        st.session_state["plan_n_lotes"] = 0
+        for k in [k for k in list(st.session_state.keys())
+                  if k.startswith(("plan_src_", "plan_pct_", "plan_man_", "plan_alc_", "plan_modo"))]:
+            del st.session_state[k]
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
+
+    # ── Resultado del plan ──────────────────────────────────────────────────
+    if plan.get("activo"):
+        st.markdown(
+            '<div class="section-title">Resultado del plan — dosis por lote</div>',
+            unsafe_allow_html=True,
+        )
+
+        alcance = plan.get("alcance", "todos")
+        lotes_plan = [str(x) for x in (plan.get("lotes") or [])]
+        if alcance != "todos" and lotes_plan and lote_col:
+            vista = df[df[lote_col].astype(str).isin(lotes_plan)]
+        else:
+            vista = df
+
+        if vista.empty:
+            st.info("Los lotes del plan no están dentro del filtro actual.")
+            return
+
+        slugs = list(dict.fromkeys(
+            normalize_col(v) for v in (plan.get("seleccion") or {}).values()
+            if v and v in CATALOGO_FUENTES
+        ))
+        cols_show = [c for c in [lote_col, finca_col, dep_col, edad_col, area_col]
+                     if c and c in vista.columns]
+        for slug in slugs:
+            pref = _rec_prefijo_plan(slug)
+            for suf in ["gpalma", "kglote"]:
+                c = f"{pref}_{suf}"
+                if c in vista.columns:
+                    cols_show.append(c)
+        cols_show += [c for c in ["Rec_total_f_gpalma", "Rec_total_f_kgpalma",
+                                  "Rec_caldol_tonlote", "Formula (N-P-K-MgO-B)",
+                                  "Plan_Fuente", "Plan_Ajuste"]
+                      if c in vista.columns]
+        cols_show = list(dict.fromkeys(cols_show))
+
+        st.dataframe(vista[cols_show], use_container_width=True)
+
+        st.markdown("##### Presupuesto agregado por fuente (lotes objetivo)")
+        filas_pres = []
+        for slug in slugs:
+            pref = _rec_prefijo_plan(slug)
+            c_ha, c_lo = f"{pref}_kgha", f"{pref}_kglote"
+            if c_lo in vista.columns:
+                kg_tot = pd.to_numeric(vista[c_lo], errors="coerce").sum()
+                filas_pres.append({
+                    "Fuente": slug.replace("_", " "),
+                    "kg/ha (promedio)": (
+                        pd.to_numeric(vista[c_ha], errors="coerce").mean()
+                        if c_ha in vista.columns else np.nan
+                    ),
+                    "kg totales (lotes objetivo)": kg_tot,
+                    "ton totales": kg_tot / 1000.0,
+                })
+        if filas_pres:
+            st.dataframe(pd.DataFrame(filas_pres), use_container_width=True, hide_index=True)
+
+        csv_plan = vista[cols_show].to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "📥 Descargar plan (CSV)", data=csv_plan,
+            file_name="plan_presupuesto_fertilizacion.csv", mime="text/csv", key="plan_dl_csv",
+        )
+        st.caption(
+            "El plan queda aplicado también en Resumen, Agrupaciones y Exportar "
+            "(columnas de auditoría `Plan_Fuente` y `Plan_Ajuste`). Usa "
+            "«↩️ Restaurar motor original» para volver a las dosis del motor."
+        )
+
+
+# ════════════════════════════════════════════════════
 # 7. SIDEBAR
 # ════════════════════════════════════════════════════
 
@@ -2693,6 +3251,13 @@ def main():
         st.warning("Sin datos con los filtros actuales.")
         return
 
+    # ── Plan de presupuesto activo: capa de ajuste posterior al motor ──
+    plan_fer = st.session_state.get("plan_fer") or {}
+    if plan_fer.get("activo"):
+        df, n_plan_lotes, avisos_plan = aplicar_plan_presupuesto(df, plan_fer)
+        st.session_state["plan_n_lotes"] = n_plan_lotes
+        st.session_state["plan_avisos"] = avisos_plan
+
     seccion_kpis(df)
 
     st.markdown("---")
@@ -2700,6 +3265,7 @@ def main():
     tab_names = ["🔍 Información",
                  "📌 Resumen",
                  "🧮 Agrupaciones",
+                 "🧾 Presupuesto",
                  "💾 Exportar",
                  ]
     tabs = st.tabs(tab_names)
@@ -2711,6 +3277,8 @@ def main():
     with tabs[2]:
         tab_agrupaciones(df)
     with tabs[3]:
+        tab_presupuesto(df)
+    with tabs[4]:
         tab_exportar(df)
 
 
