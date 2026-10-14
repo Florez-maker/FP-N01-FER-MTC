@@ -1548,7 +1548,6 @@ def tab_resumen(df: pd.DataFrame):
                     )
                     tab_formula_edad = tab_formula_edad.rename(columns={"_formula": "Fórmula"})
 
-                    # Nº de fórmulas distintas por edad (para ver dónde compatibilizar)
                     n_formulas_por_edad = (
                         tab_formula_edad.groupby(col_edad, observed=True)["Fórmula"]
                         .nunique()
@@ -2038,7 +2037,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             pd.to_numeric(df["Rec_total_n_gpalma"], errors="coerce") / 1000.0
         )
 
-    # ── Fuentes comerciales ─────────────────────────────────────────────────
     fuente_map = {
         "urea": ["fuente_urea_kg_ha", "urea (kg/ha)", "urea_ (kg/ha)"],
         "spt": ["fuente_spt_kg_ha", "spt (kg/ha)"],
@@ -2068,7 +2066,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
             lambda x: to_float_safe(x, np.nan)
         )
 
-        # Fuentes por palma: usan columna densidad.
         df[f"Rec_{key}_gpalma"] = kg_a_g_palma(
             df[f"Rec_{key}_kgha"],
             dens_s,
@@ -2088,7 +2085,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
                 lambda x: to_float_safe(x, np.nan)
             )
         elif area_col in df.columns:
-            # kg/lote solo usa kg/ha × área.
             df[f"Rec_{key}_kglote"] = kg_lote_desde_kgha(
                 df[f"Rec_{key}_kgha"],
                 area_s,
@@ -2120,7 +2116,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
                         lambda x: to_float_safe(x, np.nan)
                     )
 
-    # Homogeneizar SPT en mayúscula.
     for old, new in [
         ("Rec_spt_kgha", "Rec_SPT_kgha"),
         ("Rec_spt_kglote", "Rec_SPT_kglote"),
@@ -2130,7 +2125,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         if old in df.columns and new not in df.columns:
             df = df.rename(columns={old: new})
 
-    # ── Cal dolomita ─────────────────────────────────────────────────────────
     caldol = _find_caldol_columns(df.columns)
 
     if caldol["kgha"]:
@@ -2180,7 +2174,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         value is not None for value in caldol.values()
     )
 
-    # ── Fórmula y totales ────────────────────────────────────────────────────
     if "Formula_Kalini" in df.columns and "Formula (N-P-K-MgO-B)" not in df.columns:
         df["Formula (N-P-K-MgO-B)"] = df["Formula_Kalini"]
 
@@ -2216,7 +2209,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         )
     ]
 
-    # ── Identificación de registros ──────────────────────────────────────────
     densidad_col = _safe_find(df, ["densidad", "density", "palmas_ha"])
 
     id_cols_candidates = [
@@ -2237,7 +2229,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         if c and c in df.columns
     ]
 
-    # ── Producción: una sola columna de salida ───────────────────────────────
     internas_prod = [
         "rff_calculo",
         "fuente_rff",
@@ -2278,7 +2269,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
     else:
         prod_cols = []
 
-    # Contexto útil; densidad_real queda solo como referencia operativa.
     for c in ["especie", "densidad_real", "n_palmas_lote", "Foliar"]:
         if c in df.columns:
             prod_cols.append(c)
@@ -2303,7 +2293,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         decimals_gpalma=4,
     )
 
-    # ── Hojas de evaluación ──────────────────────────────────────────────────
     eval_agro_cols = [
         c for c in COLUMNAS_REC_ORDEN
         if c.startswith("Rec_da_") or c == "Rec_total_n_kgpalma"
@@ -2333,7 +2322,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         else pd.DataFrame()
     )
 
-    # ── Agrupaciones ─────────────────────────────────────────────────────────
     agg_candidates = [
         finca_col,
         departamento_col,
@@ -2402,7 +2390,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
 
             resumen_finca = resumen.reset_index()
 
-    # ── Archivo de salida ────────────────────────────────────────────────────
     from datetime import datetime
 
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2488,13 +2475,6 @@ def tab_exportar(df: pd.DataFrame, nombre_excel_salida: str = None):
         "csv_bytes": csv_bytes,
     }
 
-
-# ════════════════════════════════════════════════════
-# 6B. PRESUPUESTO — FUENTES PERSONALIZADAS Y AJUSTES
-#     Capa posterior al motor: no modifica las ecuaciones
-#     AGROPALMA; recalcula dosis, totales y fórmula.
-# ════════════════════════════════════════════════════
-
 CATALOGO_FUENTES = {
     "Urea":              {"N": 0.45},
     "Sulfato de amonio": {"N": 0.21, "S": 0.24},
@@ -2512,7 +2492,6 @@ CATALOGO_FUENTES = {
     "Sulfato":           {"S": 0.20},
 }
 
-# Selección por defecto = set Kalini del motor (reproduce el comportamiento original)
 KALINI_NOMBRE_POR_ELEM = {
     "N": "Urea", "P": "SPT", "K": "KCl", "Ca": "Cal_dolomita",
     "Mg": "Kieserita", "B": "Granubor", "S": "Sulfato",
@@ -2520,9 +2499,7 @@ KALINI_NOMBRE_POR_ELEM = {
 
 KALINI_SLOTS = ["urea", "spt", "kcl", "kieserita", "granubor", "sulfato", "cal_dolomita"]
 
-# Orden de descomposición con créditos secundarios (igual que el motor)
 ORDEN_DECOMP_PLAN = ["N", "P", "K", "Ca", "Mg", "B", "S"]
-
 
 def _rec_prefijo_plan(slug: str) -> str:
     if slug == "spt":
@@ -2546,17 +2523,6 @@ def _plan_default() -> dict:
 
 
 def _dosis_plan_core(df: pd.DataFrame, idx, sel: dict):
-    """
-    Descompone las necesidades (nec_*) en las fuentes seleccionadas,
-    con créditos secundarios (mismo criterio del motor: p. ej. la Kieserita
-    aporta Mg y S). Procesa en el orden N→P→K→Ca→Mg→B→S; los créditos solo
-    se descuentan de nutrientes posteriores en ese orden.
-
-    Devuelve (dosis, avisos, creditos):
-        dosis    {slug_fuente: Series kg/ha}
-        avisos   [str]
-        creditos {elemento: Series|float kg/ha aportados por otras fuentes}
-    """
     creditos, dosis, avisos = {}, {}, []
     for e in ORDEN_DECOMP_PLAN:
         fuente = sel.get(e)
@@ -2586,19 +2552,6 @@ def _dosis_plan_core(df: pd.DataFrame, idx, sel: dict):
 
 
 def aplicar_plan_presupuesto(df: pd.DataFrame, plan: dict):
-    """
-    Aplica el plan de presupuesto (fuentes seleccionadas + ajustes de dosis)
-    sobre los lotes objetivo del DataFrame ya filtrado.
-
-    Recalcula, para los lotes del plan:
-      1. necesidades ajustadas por % (nec_/da_ y todas sus unidades);
-      2. dosis por fuente (créditos secundarios incluidos) en kg/ha,
-         kg/lote, g/palma y kg/palma;
-      3. totales de fuentes y fórmula compuesta;
-      4. columnas de auditoría (Plan_Fuente, Plan_Ajuste).
-
-    Devuelve (df, n_lotes_afectados, avisos).
-    """
     if not plan or not plan.get("activo"):
         return df, 0, []
 
@@ -2634,7 +2587,6 @@ def aplicar_plan_presupuesto(df: pd.DataFrame, plan: dict):
     manual = plan.get("manual") or {}
     avisos = []
 
-    # ── 1) Ajuste por % sobre las necesidades del motor ──
     ajuste_txt = []
     if modo == "porcentaje":
         for e in ELEMENTOS_DESCOMPOSICION:
@@ -2673,11 +2625,9 @@ def aplicar_plan_presupuesto(df: pd.DataFrame, plan: dict):
                 df.loc[idx, "Rec_total_n_gpalma"].astype(float) / 1000.0
             ).round(6)
 
-    # ── 2) Descomposición en las fuentes seleccionadas ──
     dosis, avisos_core, creditos = _dosis_plan_core(df, idx, sel)
     avisos.extend(avisos_core)
 
-    # Transparencia del S (misma trazabilidad que el motor)
     if "nec_s_kg_ha" in df.columns:
         cred_s = creditos.get("S", 0.0)
         df.loc[idx, "S_necesidad_final_kg_ha"] = df.loc[idx, "nec_s_kg_ha"].astype(float).round(6)
@@ -2689,7 +2639,6 @@ def aplicar_plan_presupuesto(df: pd.DataFrame, plan: dict):
             df.loc[idx, "S_necesidad_final_kg_ha"].astype(float) - cred_s
         ).clip(lower=0).round(6)
 
-    # ── 3) Modo manual: dosis fijas por fuente (g/palma) ──
     if modo == "manual" and manual:
         ajuste_txt.append("dosis manual g/palma")
         for slug, g in manual.items():
@@ -2698,7 +2647,6 @@ def aplicar_plan_presupuesto(df: pd.DataFrame, plan: dict):
                 continue
             dosis[slug] = (g * dens_s.loc[idx] / 1000.0).clip(lower=0)
 
-    # ── 4) Escritura de dosis por fuente ──
     for key in KALINI_SLOTS:
         if key in dosis:
             continue
@@ -2823,7 +2771,6 @@ def tab_presupuesto(df: pd.DataFrame):
     edad_col = find_col(df.columns, ["edad", "age"])
     area_col = find_col(df.columns, ["area", "ha", "hectareas", "superficie"])
 
-    # ── Paso 1 · Fuentes ────────────────────────────────────────────────────
     with st.expander("1 · Selección de fuentes comerciales por nutriente", expanded=True):
         elecciones = {}
         cols = st.columns(4)
@@ -2858,7 +2805,6 @@ def tab_presupuesto(df: pd.DataFrame):
             "Si una fuente cubre dos nutrientes elegidos, se usa la dosis mayor de las dos."
         )
 
-    # ── Paso 2 · Ajuste ─────────────────────────────────────────────────────
     with st.expander("2 · Ajuste de la recomendación", expanded=True):
         pcts_efec = {e: 0 for e in ELEMENTOS_DESCOMPOSICION}
         manual_dict = {}
@@ -2914,7 +2860,6 @@ def tab_presupuesto(df: pd.DataFrame):
                     manual_dict[slug] = float(g)
                     st.caption(f"≈ {g * dens_media / 1000.0:.2f} kg/ha · {g / 1000.0:.4f} kg/palma")
 
-    # ── Paso 3 · Alcance ────────────────────────────────────────────────────
     with st.expander("3 · Alcance — lotes a los que aplica el plan", expanded=True):
         tipo_alcance = st.radio(
             "Aplicar el plan a:",
@@ -2989,7 +2934,6 @@ def tab_presupuesto(df: pd.DataFrame):
         except AttributeError:
             st.experimental_rerun()
 
-    # ── Resultado del plan ──────────────────────────────────────────────────
     if plan.get("activo"):
         st.markdown(
             '<div class="section-title">Resultado del plan — dosis por lote</div>',
@@ -3057,12 +3001,7 @@ def tab_presupuesto(df: pd.DataFrame):
             "«↩️ Restaurar motor original» para volver a las dosis del motor."
         )
 
-# ════════════════════════════════════════════════════
-# 6C. CICLOS Y KPIs GERENCIALES
-#     Ventanas de decisión: ciclo anterior (ejecutado),
-#     ciclo actual (motor + plan de presupuesto) y
-#     ciclo futuro (proyección edad +1, curva por edad).
-# ════════════════════════════════════════════════════
+    st.markdown("---")
 
 NUTRIENTES_COMPARAR = ["N", "P", "K", "Ca", "Mg", "S", "B"]
 
@@ -3077,39 +3016,58 @@ FUENTES_COMPARAR = [
 ]
 
 FUENTES_COMPUESTO = [k for k, _ in FUENTES_COMPARAR if k != "caldol"]
-
 KPI_GERENCIAL_CATALOGO = {
     "rff": {"label": "RFF medio (t/ha)", "icon": "📊",
-            "desc": "Producción de referencia del ciclo (observada o de cálculo según el modo)."},
+            "desc": "Producción de referencia del ciclo. En Futuro proviene de la curva por edad, no de datos observados."},
     "area": {"label": "Área total (ha)", "icon": "🗺️",
              "desc": "Superficie con recomendación en el ciclo."},
     "edad": {"label": "Edad media (años)", "icon": "📅",
              "desc": "Envejecimiento del cultivo entre ciclos."},
-    "inmaduros": {"label": "% lotes inmaduros (≤3 años)", "icon": "🌱",
-                  "desc": "Participación de lotes inmaduros (rangos foliares PNP)."},
-    "kgha_total": {"label": "Necesidad total de nutrientes (kg/ha)", "icon": "🧪",
-                   "desc": "Suma de N, P, K, Ca, Mg, S y B en kg/ha."},
     "n_ton": {"label": "N total (t)", "icon": "🟦", "desc": "Toneladas de nitrógeno requeridas."},
     "k_ton": {"label": "K total (t)", "icon": "🟨", "desc": "Toneladas de potasio requeridas."},
     "ton_fuentes": {"label": "Fertilizante del compuesto (t)", "icon": "🛒",
-                    "desc": "Urea + SPT + KCl + Kieserita + Granubor + Sulfato (sin enmienda)."},
+                    "desc": "Total de producto físico a comprar: Urea + SPT + KCl + Kieserita + Granubor + Sulfato (sin enmienda)."},
+    "kg_palma_total": {"label": "Dosis total (kg/palma)", "icon": "⚖️",
+                       "desc": "Fertilizante físico total por palma (fuentes del compuesto) — proxy operativo y de costo."},
     "caldol": {"label": "Cal dolomita (t)", "icon": "🪨",
                "desc": "Enmienda calcárea, fuera de la fórmula compuesta."},
-    "g_palma": {"label": "Dosis total (g/palma)", "icon": "⚖️",
-                "desc": "Dosis física media por palma — proxy de costo operativo."},
     "formulas": {"label": "N° fórmulas distintas", "icon": "🧾",
                  "desc": "Complejidad logística de mezclas por ciclo."},
-    "fol_opt": {"label": "% elementos foliares óptimos", "icon": "🟢",
-                "desc": "Celdas lote × nutriente en rango óptimo."},
     "fol_def": {"label": "% elementos foliares deficientes", "icon": "🔴",
-                "desc": "Celdas lote × nutriente en nivel bajo o crítico."},
+                "desc": "Celdas lote × nutriente en nivel bajo o crítico. La proyección Futuro hereda el foliar del ciclo actual (no hay análisis nuevo): su delta frente a Actual es 0 por construcción."},
 }
 
-KPI_GERENCIAL_DEFAULT = ["rff", "kgha_total", "ton_fuentes", "g_palma", "formulas", "fol_def"]
+KPI_GERENCIAL_DEFAULT = ["rff", "area", "edad", "ton_fuentes", "kg_palma_total", "formulas"]
+
+
+def _valor_kpi(kpi_id: str, res: dict):
+    if kpi_id == "ton_fuentes":
+        vals = [
+            res.get(f"{nombre} total (t)")
+            for key, nombre in FUENTES_COMPARAR if key in FUENTES_COMPUESTO
+        ]
+        vals = [v for v in vals if v is not None and not pd.isna(v)]
+        return float(np.sum(vals)) if vals else np.nan
+
+    mapping = {
+        "rff": "RFF medio (t/ha)",
+        "area": "Área (ha)",
+        "edad": "Edad media (años)",
+        "n_ton": "N total (t)",
+        "k_ton": "K total (t)",
+        "kg_palma_total": "Dosis total (kg/palma)",
+        "caldol": "Cal dolomita total (t)",
+        "formulas": "N° fórmulas distintas",
+        "fol_def": "% elementos foliares deficientes",
+    }
+    v = res.get(mapping.get(kpi_id, ""), np.nan)
+    try:
+        return float(v) if v is not None and not pd.isna(v) else np.nan
+    except Exception:
+        return np.nan
 
 
 def _col_ciclo(df: pd.DataFrame, candidatos):
-    """Primera columna existente: búsqueda exacta y luego normalizada."""
     for c in candidatos:
         if c in df.columns:
             return c
@@ -3123,12 +3081,29 @@ def _serie_num(df: pd.DataFrame, col):
     return pd.to_numeric(df[col], errors="coerce")
 
 
-def resumen_ciclo(df: pd.DataFrame, etiqueta: str = "Ciclo") -> dict:
-    """Agrega un ciclo procesado a un diccionario de indicadores.
+METRICAS_GRUPO_CLAVE = [
+    "Lotes",
+    "Área (ha)",
+    "Edad media (años)",
+    "RFF medio (t/ha)",
+    "Total fertilizante (t)",
+    "Dosis total (kg/palma)",
+    "N (kg/palma)", "P (kg/palma)", "K (kg/palma)",
+    "Ca (kg/palma)", "Mg (kg/palma)", "S (kg/palma)", "B (kg/palma)",
+    "Urea (kg/ha)", "SPT (kg/ha)", "KCl (kg/ha)",
+    "Kieserita (kg/ha)", "Granubor (kg/ha)", "Sulfato (kg/ha)",
+]
 
-    Funciona con datasets recién calculados por el motor y con exports
-    estandarizados de la propia calculadora (columnas Rec_*).
-    """
+DIMENSIONES_CICLOS = {
+    "General": None,
+    "Por finca": ["finca", "farm", "hacienda"],
+    "Por departamento": ["departamento", "depto", "zona", "region"],
+    "Por material": ["material", "material_genetico"],
+    "Por franja de edad": None,
+}
+
+
+def resumen_ciclo(df: pd.DataFrame, etiqueta: str = "Ciclo") -> dict:
     out = {"Ciclo": etiqueta, "Lotes": len(df)}
 
     area_col = _col_ciclo(df, ["area", "ha", "hectareas", "superficie"])
@@ -3153,7 +3128,6 @@ def resumen_ciclo(df: pd.DataFrame, etiqueta: str = "Ciclo") -> dict:
     rff = _serie_num(df, rff_col)
     out["RFF medio (t/ha)"] = float(rff.mean()) if rff.notna().any() else np.nan
 
-    # Necesidad nutricional (kg/ha media y toneladas totales)
     for e in NUTRIENTES_COMPARAR:
         col = _col_ciclo(df, [f"Rec_da_{e}_kgha", f"nec_{e.lower()}_kg_ha", f"da_{e.lower()}_kg_ha"])
         v = _serie_num(df, col)
@@ -3164,7 +3138,11 @@ def resumen_ciclo(df: pd.DataFrame, etiqueta: str = "Ciclo") -> dict:
             out[f"{e} (kg/ha)"] = np.nan
             out[f"{e} total (t)"] = np.nan
 
-    # Fuentes comerciales (kg/ha media y toneladas totales)
+    for e in NUTRIENTES_COMPARAR:
+        col = _col_ciclo(df, [f"Rec_da_{e}_kgpalma", f"nec_{e.lower()}_kg_palma", f"da_{e.lower()}_kg_palma"])
+        v = _serie_num(df, col)
+        out[f"{e} (kg/palma)"] = float(v.mean()) if v.notna().any() else np.nan
+
     for key, nombre in FUENTES_COMPARAR:
         c_ha = _col_ciclo(df, [f"Rec_{key}_kgha", f"fuente_{key}_kg_ha"])
         c_lo = _col_ciclo(df, [f"Rec_{key}_kglote", f"fuente_{key}_kg_lote"])
@@ -3178,16 +3156,23 @@ def resumen_ciclo(df: pd.DataFrame, etiqueta: str = "Ciclo") -> dict:
         else:
             out[f"{nombre} total (t)"] = np.nan
 
-    # Dosis totales por palma (proxy de costo operativo)
-    tot_f = _col_ciclo(df, ["Rec_total_f_gpalma", "total_fuentes_g_palma"])
-    v = _serie_num(df, tot_f)
-    out["Dosis total (g/palma)"] = float(v.mean()) if v.notna().any() else np.nan
+    ton_comp = [out.get(f"{nombre} total (t)", np.nan)
+                for key, nombre in FUENTES_COMPARAR if key in FUENTES_COMPUESTO]
+    ton_comp = [v for v in ton_comp if v is not None and not pd.isna(v)]
+    out["Total fertilizante (t)"] = float(np.sum(ton_comp)) if ton_comp else np.nan
 
-    tot_n = _col_ciclo(df, ["Rec_total_n_gpalma", "total_g_palma"])
+    tot_fk = _col_ciclo(df, ["Rec_total_f_kgpalma", "total_fuentes_kg_palma"])
+    v = _serie_num(df, tot_fk)
+    out["Dosis total (kg/palma)"] = float(v.mean()) if v.notna().any() else np.nan
+    out["Dosis total (g/palma)"] = (
+        float(out["Dosis total (kg/palma)"] * 1000.0)
+        if not pd.isna(out["Dosis total (kg/palma)"]) else np.nan
+    )
+
+    tot_n = _col_ciclo(df, ["Rec_total_n_kgpalma", "total_kg_palma"])
     v = _serie_num(df, tot_n)
-    out["Nutrientes totales (g/palma)"] = float(v.mean()) if v.notna().any() else np.nan
+    out["Nutrientes totales (kg/palma)"] = float(v.mean()) if v.notna().any() else np.nan
 
-    # Fórmulas distintas (logística de mezclas)
     f_col = _col_ciclo(df, ["Formula (N-P-K-MgO-B)", "Formula_Kalini"])
     if f_col is not None:
         f_s = df[f_col].astype(str).replace({"nan": np.nan, "None": np.nan}).dropna()
@@ -3195,7 +3180,6 @@ def resumen_ciclo(df: pd.DataFrame, etiqueta: str = "Ciclo") -> dict:
     else:
         out["N° fórmulas distintas"] = np.nan
 
-    # Estado foliar (celdas lote × nutriente)
     status_cols = [c for c in df.columns if str(c).lower().startswith("status_")]
     if status_cols:
         vals = df[status_cols].astype(str).apply(lambda s: s.str.lower())
@@ -3217,14 +3201,121 @@ def resumen_ciclo(df: pd.DataFrame, etiqueta: str = "Ciclo") -> dict:
     return out
 
 
+def _serie_grupo(df: pd.DataFrame, dimension: str) -> pd.Series:
+    if dimension == "Por franja de edad":
+        col = _col_ciclo(df, ["edad", "age", "anos", "ano_planta", "idade"])
+        if col is None:
+            return pd.Series("(sin edad)", index=df.index)
+        g = df[col].apply(franja_edad).astype(str)
+        orden_cat = pd.CategoricalDtype(FRANJAS_EDAD, ordered=True)
+        return g.astype(orden_cat)
+    candidatos = DIMENSIONES_CICLOS.get(dimension) or []
+    col = _col_ciclo(df, candidatos) if candidatos else None
+    if col is None:
+        return pd.Series("(sin dato)", index=df.index)
+    return (df[col].astype(str)
+            .replace({"nan": "(sin dato)", "None": "(sin dato)", "": "(sin dato)"}))
+
+
+def _resumenes_ciclos_agrupados(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame,
+                                dimension: str) -> dict:
+    dfs = {}
+    df_prev = st.session_state.get("ciclo_anterior_df")
+    if df_prev is not None and len(df_prev) > 0:
+        dfs["Anterior"] = df_prev
+    dfs["Actual"] = df_actual
+    df_fut = obtener_ciclo_futuro(df_base_sin_plan)
+    if df_fut is not None and len(df_fut) > 0:
+        dfs["Futuro (proyectado)"] = df_fut
+
+    out = {}
+    for ciclo, df_c in dfs.items():
+        g = _serie_grupo(df_c, dimension)
+        out[ciclo] = {}
+        for grupo, sub in df_c.groupby(g, sort=True, observed=True):
+            out[ciclo][str(grupo)] = resumen_ciclo(sub, ciclo)
+    return out
+
+
+def _tabla_comparativa_agrupada(res_g: dict, solo_clave: bool = True) -> pd.DataFrame:
+    ciclos = list(res_g.keys())
+
+    metricas = []
+    for por_grupo in res_g.values():
+        for res in por_grupo.values():
+            for k in res:
+                if k != "Ciclo" and k not in metricas:
+                    metricas.append(k)
+    if solo_clave:
+        metricas = [m for m in METRICAS_GRUPO_CLAVE if m in metricas]
+
+    grupos = []
+    for c in ciclos:
+        for g in res_g[c]:
+            if g not in grupos:
+                grupos.append(g)
+
+    filas = []
+    for g in grupos:
+        for m in metricas:
+            fila = {"Grupo": g, "Indicador": m}
+            for c in ciclos:
+                fila[c] = res_g.get(c, {}).get(g, {}).get(m, np.nan)
+            if len(ciclos) >= 2:
+                try:
+                    fila[f"Δ {ciclos[-1]} − {ciclos[0]}"] = round(
+                        float(fila[ciclos[-1]]) - float(fila[ciclos[0]]), 2
+                    )
+                except Exception:
+                    fila[f"Δ {ciclos[-1]} − {ciclos[0]}"] = np.nan
+            filas.append(fila)
+
+    df_out = pd.DataFrame(filas)
+    if not df_out.empty:
+        for c in ciclos:
+            df_out[c] = pd.to_numeric(df_out[c], errors="coerce").round(2)
+        if len(ciclos) >= 2:
+            df_out[f"Δ {ciclos[-1]} − {ciclos[0]}"] = pd.to_numeric(
+                df_out[f"Δ {ciclos[-1]} − {ciclos[0]}"], errors="coerce"
+            )
+    return df_out
+
+
+def _lectura_agrupada(df_g: pd.DataFrame, ciclos):
+    if df_g is None or df_g.empty or len(ciclos) < 2:
+        return ["- Sin datos suficientes para la lectura por grupo."]
+    col_d = f"Δ {ciclos[-1]} − {ciclos[0]}"
+    if col_d not in df_g.columns:
+        return ["- Sin datos suficientes para la lectura por grupo."]
+
+    notas = []
+    umbrales = [
+        ("Total fertilizante (t)", 0.5, "t"),
+        ("Dosis total (kg/palma)", 0.05, "kg/palma"),
+        ("K (kg/palma)", 0.01, "kg/palma"),
+    ]
+    for grupo, sub in df_g.groupby("Grupo", sort=False):
+        for indicador, umbral, unidad in umbrales:
+            fila = sub[sub["Indicador"] == indicador]
+            if fila.empty:
+                continue
+            d = fila.iloc[0][col_d]
+            if pd.isna(d) or abs(float(d)) < umbral:
+                continue
+            notas.append(
+                f"- **{grupo} · {indicador}**: {float(d):+,.2f} {unidad} entre "
+                f"**{ciclos[0]}** y **{ciclos[-1]}**."
+            )
+    if not notas:
+        notas.append(
+            "- Sin diferencias relevantes por grupo en los umbrales de lectura "
+            "(≥ 0,5 t; ≥ 0,05 kg/palma; K ≥ 0,01 kg/palma)."
+        )
+    return notas
+
+
 def cargar_ciclo_anterior(file_bytes: bytes, nombre: str = "",
                           tratar_como_export: bool = True) -> pd.DataFrame:
-    """Carga el ciclo anterior.
-
-    - Export estandarizado → se toma tal cual: refleja las decisiones tal
-      como se ejecutaron.
-    - Dataset crudo → se recalcula con el motor (modo Agrónomo: ton/ha real).
-    """
     df_prev = None
     if tratar_como_export:
         try:
@@ -3249,12 +3340,6 @@ def cargar_ciclo_anterior(file_bytes: bytes, nombre: str = "",
 
 
 def proyectar_ciclo_futuro(df_base: pd.DataFrame):
-    """Proyecta el ciclo futuro: edad + 1 año y RFF desde la curva por edad
-    (misma lógica del modo Regresión; techo de 14 t/ha para edad > 26).
-
-    Hereda material genético, análisis foliares y el plan de presupuesto
-    activo. Devuelve None si el dataset no tiene columna de edad.
-    """
     df = df_base.copy()
     edad_col = find_col(df.columns, ["edad", "age", "anos", "ano_planta", "idade"])
     if edad_col is None:
@@ -3270,11 +3355,6 @@ def proyectar_ciclo_futuro(df_base: pd.DataFrame):
 
 
 def obtener_ciclo_futuro(df_base: pd.DataFrame):
-    """Proyección del ciclo futuro con caché en session_state.
-
-    La caché se invalida cuando cambian los datos base (filtros o archivo),
-    el plan de presupuesto o el modo de cálculo.
-    """
     plan = st.session_state.get("plan_fer") or {}
     area_col = _col_ciclo(df_base, ["area", "ha", "hectareas", "superficie"])
     huella = [
@@ -3298,8 +3378,6 @@ def obtener_ciclo_futuro(df_base: pd.DataFrame):
 
 
 def _resumenes_ciclos(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame) -> dict:
-    """Resúmenes agregados por ciclo: Anterior (si está cargado),
-    Actual (motor + plan) y Futuro (proyección)."""
     resumenes = {}
 
     df_prev = st.session_state.get("ciclo_anterior_df")
@@ -3315,7 +3393,6 @@ def _resumenes_ciclos(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame) -
 
 
 def _tabla_comparativa(resumenes: dict, filas=None) -> pd.DataFrame:
-    """Tabla indicadores × ciclos, con deltas entre ciclos."""
     df_comp = pd.DataFrame(resumenes)
     if "Ciclo" in df_comp.index:
         df_comp = df_comp.drop(index="Ciclo")
@@ -3334,7 +3411,6 @@ def _tabla_comparativa(resumenes: dict, filas=None) -> pd.DataFrame:
 
 
 def _lectura_comparativo(df_comp: pd.DataFrame):
-    """Notas automáticas de lectura agronómica del comparativo de ciclos."""
     notas = []
     ciclos = [c for c in df_comp.columns if not str(c).startswith("Δ")]
 
@@ -3394,9 +3470,8 @@ def _lectura_comparativo(df_comp: pd.DataFrame):
         )
     return notas
 
+
 def tab_ciclos(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame):
-    """Ventana comparativa: ciclo anterior (ejecutado), actual (motor + plan)
-    y futuro (proyección edad +1 con la curva por edad)."""
     st.markdown(
         '<div class="section-title">Ciclos — decisiones del año anterior, actual y futuro</div>',
         unsafe_allow_html=True,
@@ -3406,11 +3481,10 @@ def tab_ciclos(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame):
         "**Anterior** = recomendaciones ejecutadas (export estandarizado del ciclo pasado o "
         "dataset reprocesado con el motor) · **Actual** = motor + plan de presupuesto vigente · "
         "**Futuro** = proyección con **edad +1 año** y RFF de la **curva por edad** (no usa la "
-        "producción pasada), heredando el plan activo. Los lotes que pasan de 3 a 4 años cambian "
-        "a rangos foliares de palma productiva."
+        "producción pasada), heredando el plan activo. Compara los tres momentos a nivel general "
+        "o desglosados por **finca, departamento, material o franja de edad**."
     )
 
-    # ── Ventana 1 · Carga del ciclo anterior ────────────────────────────────
     with st.expander("📂 Ventana 1 · Ciclo anterior — archivo de referencia",
                      expanded=st.session_state.get("ciclo_anterior_df") is None):
         modo_carga = st.radio(
@@ -3458,21 +3532,43 @@ def tab_ciclos(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame):
             f"({len(df_prev_s)} lotes). Se compara tal cual, sin aplicar los filtros de la barra lateral."
         )
 
-    # ── Consolidado de ciclos ───────────────────────────────────────────────
+    cdim, copc = st.columns([1.1, 2])
+    dimension = cdim.selectbox("Nivel de comparación:", list(DIMENSIONES_CICLOS),
+                               index=0, key="cic_dimension")
+    mostrar_todas = copc.checkbox(
+        "Mostrar todas las métricas", value=False, key="cic_todas_metricas",
+        help="Desactivado: solo métricas clave (área, edad, RFF, toneladas, dosis total y "
+             "por nutriente en kg/palma, kg/ha por fuente). Activado: agrega foliares, "
+             "fórmulas, cal dolomita, g/palma y totales por nutriente en t.",
+    )
+
     try:
         with st.spinner("⏳ Consolidando ciclos (la proyección futura se calcula una vez y queda en caché)..."):
-            resumenes = _resumenes_ciclos(df_actual, df_base_sin_plan)
+            if dimension == "General":
+                resumenes = _resumenes_ciclos(df_actual, df_base_sin_plan)
+                res_grupo = None
+            else:
+                res_grupo = _resumenes_ciclos_agrupados(df_actual, df_base_sin_plan, dimension)
+                resumenes = None
     except Exception as e:
         st.error(f"❌ Error consolidando ciclos: {e}")
         st.exception(e)
         return
 
-    if len(resumenes) < 2:
+    if dimension == "General":
+        hay_anterior = "Anterior" in (resumenes or {})
+        _muestra_ant = (resumenes or {}).get("Anterior")
+    else:
+        hay_anterior = "Anterior" in (res_grupo or {})
+        _por_g = (res_grupo or {}).get("Anterior") or {}
+        _muestra_ant = next(iter(_por_g.values())) if _por_g else None
+
+    if not hay_anterior:
         st.info("📂 Carga el **ciclo anterior** para habilitar el comparativo completo. "
                 "Mientras tanto se muestra el ciclo actual y la proyección del futuro.")
 
-    if "Anterior" in resumenes and all(
-        pd.isna(resumenes["Anterior"].get(f"{e} (kg/ha)", np.nan)) for e in NUTRIENTES_COMPARAR
+    if _muestra_ant is not None and all(
+        pd.isna(_muestra_ant.get(f"{e} (kg/ha)", np.nan)) for e in NUTRIENTES_COMPARAR
     ):
         st.warning(
             "⚠️ El archivo del ciclo anterior no tiene columnas de recomendación reconocibles "
@@ -3480,97 +3576,99 @@ def tab_ciclos(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame):
             "dataset con el formato de entrada."
         )
 
-    df_comp = _tabla_comparativa(resumenes)
+    if dimension == "General":
+        df_comp = _tabla_comparativa(resumenes)
 
-    st.markdown("#### Tabla comparativa de indicadores por ciclo")
-    st.dataframe(df_comp, use_container_width=True)
+        st.markdown("#### Tabla comparativa de indicadores por ciclo")
+        st.dataframe(df_comp, use_container_width=True)
 
-    # ── Demanda nutricional por ciclo ───────────────────────────────────────
-    filas_kgha = [f"{e} (kg/ha)" for e in NUTRIENTES_COMPARAR if f"{e} (kg/ha)" in df_comp.index]
-    if filas_kgha:
-        st.markdown("#### Demanda nutricional por ciclo (kg/ha)")
-        df_long_n = (
-            df_comp.loc[filas_kgha].T
-            .rename_axis("Ciclo")
-            .reset_index()
-            .melt(id_vars="Ciclo", var_name="Nutriente", value_name="Necesidad (kg/ha)")
-        )
-        df_long_n["Nutriente"] = df_long_n["Nutriente"].str.replace(" (kg/ha)", "", regex=False)
-        fig_n = px.bar(
-            df_long_n, x="Nutriente", y="Necesidad (kg/ha)", color="Ciclo", barmode="group",
-            color_discrete_sequence=["#7A8899", "#1b60a7", "#1A6B3C"],
-        )
-        fig_n.update_layout(margin=dict(t=10, l=0, r=0, b=0), legend=dict(orientation="h", y=-0.2))
-        st.plotly_chart(fig_n, use_container_width=True, key="cic_chart_kgha")
+        filas_kgha = [f"{e} (kg/ha)" for e in NUTRIENTES_COMPARAR if f"{e} (kg/ha)" in df_comp.index]
+        if filas_kgha:
+            st.markdown("#### Demanda nutricional por ciclo (kg/ha)")
+            df_long_n = (
+                df_comp.loc[filas_kgha].T
+                .rename_axis("Ciclo")
+                .reset_index()
+                .melt(id_vars="Ciclo", var_name="Nutriente", value_name="Necesidad (kg/ha)")
+            )
+            df_long_n["Nutriente"] = df_long_n["Nutriente"].str.replace(" (kg/ha)", "", regex=False)
+            fig_n = px.bar(
+                df_long_n, x="Nutriente", y="Necesidad (kg/ha)", color="Ciclo", barmode="group",
+                color_discrete_sequence=["#7A8899", "#1b60a7", "#1A6B3C"],
+            )
+            fig_n.update_layout(margin=dict(t=10, l=0, r=0, b=0), legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig_n, use_container_width=True, key="cic_chart_kgha")
 
-    # ── Fertilizante por fuente y ciclo ─────────────────────────────────────
-    filas_ton = [
-        f"{nombre} total (t)" for _, nombre in FUENTES_COMPARAR
-        if f"{nombre} total (t)" in df_comp.index
-    ]
-    if filas_ton:
-        st.markdown("#### Fertilizante por fuente y ciclo (t)")
-        df_long_f = (
-            df_comp.loc[filas_ton].T
-            .rename_axis("Ciclo")
-            .reset_index()
-            .melt(id_vars="Ciclo", var_name="Fuente", value_name="Toneladas")
-        )
-        fig_f = px.bar(
-            df_long_f, x="Fuente", y="Toneladas", color="Ciclo", barmode="group",
-            color_discrete_sequence=["#7A8899", "#1b60a7", "#1A6B3C"],
-        )
-        fig_f.update_layout(margin=dict(t=10, l=0, r=0, b=0), legend=dict(orientation="h", y=-0.2))
-        st.plotly_chart(fig_f, use_container_width=True, key="cic_chart_fuentes")
+        filas_ton = [
+            f"{nombre} total (t)" for _, nombre in FUENTES_COMPARAR
+            if f"{nombre} total (t)" in df_comp.index
+        ]
+        if filas_ton:
+            st.markdown("#### Fertilizante por fuente y ciclo (t)")
+            df_long_f = (
+                df_comp.loc[filas_ton].T
+                .rename_axis("Ciclo")
+                .reset_index()
+                .melt(id_vars="Ciclo", var_name="Fuente", value_name="Toneladas")
+            )
+            fig_f = px.bar(
+                df_long_f, x="Fuente", y="Toneladas", color="Ciclo", barmode="group",
+                color_discrete_sequence=["#7A8899", "#1b60a7", "#1A6B3C"],
+            )
+            fig_f.update_layout(margin=dict(t=10, l=0, r=0, b=0), legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig_f, use_container_width=True, key="cic_chart_fuentes")
 
-    csv_cic = df_comp.reset_index().to_csv(index=False).encode("utf-8-sig")
+        csv_cic = df_comp.reset_index().to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "📥 Descargar comparativo de ciclos (CSV)",
+            data=csv_cic, file_name="comparativo_ciclos_fertilizacion.csv", mime="text/csv",
+            key="cic_dl_csv",
+        )
+
+        with st.expander("Lectura agronómica del comparativo", expanded=True):
+            for nota in _lectura_comparativo(df_comp):
+                st.markdown(nota)
+        return
+
+    sin_col = [c for c, pg in res_grupo.items() if set(pg) <= {"(sin dato)", "(sin edad)"}]
+    if sin_col:
+        st.warning(
+            f"⚠️ El ciclo **{' y '.join(sin_col)}** no tiene la columna de la dimensión "
+            f"seleccionada; sus lotes aparecen como «(sin dato)»."
+        )
+
+    df_g = _tabla_comparativa_agrupada(res_grupo, solo_clave=not mostrar_todas)
+    ciclos_g = list(res_grupo.keys())
+
+    st.markdown(f"#### Comparativo por {dimension.replace('Por ', '').lower()}")
+    st.dataframe(df_g, use_container_width=True)
+
+    if not df_g.empty and "Total fertilizante (t)" in set(df_g["Indicador"]):
+        df_ton = df_g[df_g["Indicador"] == "Total fertilizante (t)"].copy()
+        df_long_t = df_ton.melt(id_vars=["Grupo"], value_vars=ciclos_g,
+                                var_name="Ciclo", value_name="Toneladas")
+        fig_gt = px.bar(df_long_t, x="Grupo", y="Toneladas", color="Ciclo", barmode="group",
+                        color_discrete_sequence=["#7A8899", "#1b60a7", "#1A6B3C"])
+        fig_gt.update_layout(margin=dict(t=10, l=0, r=0, b=0), legend=dict(orientation="h", y=-0.2))
+        st.plotly_chart(fig_gt, use_container_width=True, key="cic_chart_grupo_ton")
+
+    slug_dim = normalize_col(dimension) or "grupo"
+    csv_g = df_g.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "📥 Descargar comparativo de ciclos (CSV)",
-        data=csv_cic, file_name="comparativo_ciclos_fertilizacion.csv", mime="text/csv",
-        key="cic_dl_csv",
+        "📥 Descargar comparativo por grupo (CSV)", data=csv_g,
+        file_name=f"comparativo_ciclos_{slug_dim}.csv", mime="text/csv",
+        key="cic_dl_csv_grupo",
     )
 
-    with st.expander("Lectura agronómica del comparativo", expanded=True):
-        for nota in _lectura_comparativo(df_comp):
+    with st.expander("🧠 Lectura agronómica del comparativo por grupo", expanded=True):
+        for nota in _lectura_agrupada(df_g, ciclos_g):
             st.markdown(nota)
 
-def _valor_kpi(kpi_id: str, res: dict):
-    """Valor de un KPI gerencial a partir de un resumen de ciclo."""
-    if kpi_id == "kgha_total":
-        vals = [res.get(f"{e} (kg/ha)") for e in NUTRIENTES_COMPARAR]
-        vals = [v for v in vals if v is not None and not pd.isna(v)]
-        return float(np.sum(vals)) if vals else np.nan
-    if kpi_id == "ton_fuentes":
-        vals = [
-            res.get(f"{nombre} total (t)")
-            for key, nombre in FUENTES_COMPARAR if key in FUENTES_COMPUESTO
-        ]
-        vals = [v for v in vals if v is not None and not pd.isna(v)]
-        return float(np.sum(vals)) if vals else np.nan
 
-    mapping = {
-        "rff": "RFF medio (t/ha)",
-        "area": "Área (ha)",
-        "edad": "Edad media (años)",
-        "inmaduros": "% lotes inmaduros (≤3 años)",
-        "n_ton": "N total (t)",
-        "k_ton": "K total (t)",
-        "caldol": "Cal dolomita total (t)",
-        "g_palma": "Dosis total (g/palma)",
-        "formulas": "N° fórmulas distintas",
-        "fol_opt": "% elementos foliares óptimos",
-        "fol_def": "% elementos foliares deficientes",
-    }
-    v = res.get(mapping.get(kpi_id, ""), np.nan)
-    try:
-        return float(v) if v is not None and not pd.isna(v) else np.nan
-    except Exception:
-        return np.nan
+    st.markdown("---")
 
 
 def tab_kpis_gerenciales(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame):
-    """Ventana configurable de indicadores clave para gerencia,
-    comparando los ciclos cargados (Anterior · Actual · Futuro)."""
     st.markdown(
         '<div class="section-title">KPIs Gerenciales — elige lo que el gerente debe ver</div>',
         unsafe_allow_html=True,
@@ -3581,10 +3679,28 @@ def tab_kpis_gerenciales(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame
         "de cada indicador están en el catálogo al final de esta ventana."
     )
 
+    opciones_kpi = list(KPI_GERENCIAL_CATALOGO.keys())
+
+    seleccion_guardada = st.session_state.get("kpis_gerenciales_sel")
+
+    if seleccion_guardada is None:
+        seleccion_guardada = [
+            k for k in KPI_GERENCIAL_DEFAULT
+            if k in opciones_kpi
+        ]
+    elif isinstance(seleccion_guardada, (list, tuple)):
+        seleccion_guardada = [
+            k for k in seleccion_guardada
+            if k in opciones_kpi
+        ]
+    else:
+        seleccion_guardada = []
+
+    st.session_state["kpis_gerenciales_sel"] = seleccion_guardada
+
     sel_kpis = st.multiselect(
         "Indicadores clave del gerente:",
-        options=list(KPI_GERENCIAL_CATALOGO),
-        default=st.session_state.get("kpis_gerenciales_sel", KPI_GERENCIAL_DEFAULT),
+        options=opciones_kpi,
         format_func=lambda k: KPI_GERENCIAL_CATALOGO[k]["label"],
         key="kpis_gerenciales_sel",
     )
@@ -3601,54 +3717,38 @@ def tab_kpis_gerenciales(df_actual: pd.DataFrame, df_base_sin_plan: pd.DataFrame
         st.info("Selecciona al menos un indicador para armar la ventana gerencial.")
         return
 
-    # ── Ventanas de KPIs: una tarjeta por ciclo, una fila por indicador ─────
     for kpi_id in sel_kpis:
         meta = KPI_GERENCIAL_CATALOGO[kpi_id]
+
         st.markdown(
             f'<div class="section-title">{meta["icon"]} {meta["label"]}</div>',
             unsafe_allow_html=True,
         )
+
         cols_k = st.columns(max(len(resumenes), 1))
+
         for col, (nombre_ciclo, res_ciclo) in zip(cols_k, resumenes.items()):
-            v = _valor_kpi(kpi_id, res_ciclo)
-            txt = f"{v:,.2f}" if not pd.isna(v) else "—"
-            color = "#7A8899" if nombre_ciclo.startswith("Anterior") else (
-                "#1b60a7" if nombre_ciclo.startswith("Actual") else "#1A6B3C"
+            valor = _valor_kpi(kpi_id, res_ciclo)
+            texto = f"{valor:,.2f}" if not pd.isna(valor) else "—"
+
+            if nombre_ciclo.startswith("Anterior"):
+                color = "#7A8899"
+            elif nombre_ciclo.startswith("Actual"):
+                color = "#1b60a7"
+            else:
+                color = "#1A6B3C"
+
+            kpi_card(
+                col,
+                nombre_ciclo,
+                texto,
+                sub=meta["desc"],
+                icon="",
+                color=color,
             )
-            kpi_card(col, nombre_ciclo, txt, sub=meta["desc"], icon="", color=color)
 
-    # ── Consolidado gerencial ───────────────────────────────────────────────
-    st.markdown("#### Consolidado gerencial")
-    st.caption("Δ = último ciclo mostrado menos primero (p. ej. Futuro − Anterior).")
+    st.markdown("---")
 
-    tabla_k = {}
-    for kpi_id in sel_kpis:
-        label = KPI_GERENCIAL_CATALOGO[kpi_id]["label"]
-        tabla_k[label] = {ciclo: _valor_kpi(kpi_id, res) for ciclo, res in resumenes.items()}
-    df_k = pd.DataFrame(tabla_k).T.apply(pd.to_numeric, errors="coerce").round(2)
-
-    ciclos_k = list(df_k.columns)
-    if len(ciclos_k) >= 2:
-        df_k[f"Δ {ciclos_k[-1]} − {ciclos_k[0]}"] = (df_k[ciclos_k[-1]] - df_k[ciclos_k[0]]).round(2)
-
-    st.dataframe(df_k, use_container_width=True)
-
-    csv_k = df_k.reset_index().to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "📥 Descargar KPIs gerenciales (CSV)",
-        data=csv_k, file_name="kpis_gerenciales_ciclos.csv", mime="text/csv",
-        key="kpi_dl_csv",
-    )
-
-    # ── Catálogo ────────────────────────────────────────────────────────────
-    with st.expander("📖 Catálogo de indicadores", expanded=False):
-        st.dataframe(
-            pd.DataFrame([
-                {"Indicador": m["label"], "Definición": m["desc"]}
-                for m in KPI_GERENCIAL_CATALOGO.values()
-            ]),
-            use_container_width=True, hide_index=True,
-        )
 
 # ════════════════════════════════════════════════════
 # 7. SIDEBAR
@@ -3708,6 +3808,7 @@ def render_sidebar():
             "El sistema normaliza automáticamente mayúsculas, minúsculas, "
             "acentos, espacios y caracteres especiales."
         )
+
         st.markdown("---")
 
         st.markdown("### ⚙️ Modo de productividad (RFF)")
@@ -3721,6 +3822,7 @@ def render_sidebar():
                 "Regresión: usa la curva modelada por edad y material."
             ),
         )
+
         st.markdown("---")
     return uploaded, modo_rff
 
@@ -3837,8 +3939,6 @@ def main():
         st.warning("Sin datos con los filtros actuales.")
         return
 
-    # ── Snapshot SIN plan: insumo de las tabs Ciclos y KPIs Gerenciales
-    #    (la proyección Futuro hereda el plan desde session_state) ──
     df_base_sin_plan = df.copy()
 
     plan_fer = st.session_state.get("plan_fer") or {}
@@ -3851,13 +3951,14 @@ def main():
 
     st.markdown("---")
 
-    tab_names = ["🔍 Información",
-                 "📌 Resumen",
-                 "🧮 Agrupaciones",
-                 "🧾 Presupuesto",
-                 "🧬 Ciclos",
-                 "📊 KPIs Gerenciales",
-                 "💾 Exportar",
+    tab_names = [
+                "🔍 Información",
+                "📌 Resumen",
+                "🧮 Agrupaciones",
+                "🧾 Presupuesto",
+                "🧬 Ciclos",
+                "📊 KPIs Gerenciales",
+                "💾 Exportar",
                  ]
     tabs = st.tabs(tab_names)
 
